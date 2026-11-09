@@ -31,6 +31,20 @@ fn main() {
         slot::root::ensure(std::path::Path::new(&dir));
         return;
     }
+    #[cfg(unix)]
+    if first.as_deref() == Some("--pico8") {
+        let (Some(card), Some(run)) = (
+            std::env::var_os("SLOT_ROOT"),
+            std::env::var_os(slot::loading_mark::RUN_VAR),
+        ) else {
+            eprintln!("slot: --pico8 needs SLOT_ROOT and SLOT_RUN");
+            std::process::exit(2);
+        };
+        std::process::exit(slot::pico8::run(
+            std::path::Path::new(&card),
+            std::path::Path::new(&run),
+        ));
+    }
     slot::crash::install();
 
     #[cfg(feature = "host")]

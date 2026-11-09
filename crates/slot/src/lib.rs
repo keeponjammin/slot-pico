@@ -50,6 +50,7 @@ pub mod networks;
 pub mod pacer;
 pub mod panel_turn;
 pub mod persist;
+pub mod pico8;
 pub mod editing;
 pub mod prefetch;
 pub mod print_scene;

@@ -41,7 +41,7 @@ pub fn box_size(platform: Platform) -> (u32, u32) {
         Platform::Gba | Platform::Gbav => (318, 282),
         #[cfg(feature = "nds")]
         Platform::Nds => (318, 282),
-        Platform::Gb | Platform::Gbc => (312, 277),
+        Platform::Gb | Platform::Gbc | Platform::Pico8 => (312, 277),
     }
 }
 

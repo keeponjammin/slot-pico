@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 pub const DIRS: &[&str] = &[
     "BIOS",
+    "BIOS/PICO-8",
     "Bezels",
     "Bezels/GBA",
     "Bezels/GB",
@@ -16,6 +17,7 @@ pub const DIRS: &[&str] = &[
     "Games/GBC",
     #[cfg(feature = "nds")]
     "Games/NDS",
+    "Games/PICO8",
     "Guides",
     "Guides/GBA",
     "Guides/GBAV",
@@ -28,6 +30,7 @@ pub const DIRS: &[&str] = &[
     "Labels/GBC",
     #[cfg(feature = "nds")]
     "Labels/NDS",
+    "Labels/PICO8",
     "Logs",
     "Overlays",
     "Overlays/GBA",
@@ -42,6 +45,7 @@ pub const DIRS: &[&str] = &[
     "Saves/GBC",
     #[cfg(feature = "nds")]
     "Saves/NDS",
+    "Saves/PICO8",
     "States",
     "States/GBA",
     "States/GBAV",
@@ -57,6 +61,7 @@ pub fn ensure(root: &Path) {
     for sub in DIRS {
         let _ = std::fs::create_dir_all(root.join(sub));
     }
+    crate::pico8::stock_shelf(root);
     move_label_cache(root);
     crate::romm::install::sweep(root);
     if let Err(e) = slot_store::move_config(root) {

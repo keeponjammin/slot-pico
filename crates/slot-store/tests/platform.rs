@@ -4,7 +4,7 @@ use slot_store::Platform;
 #[test]
 fn every_platform_has_a_directory() {
     let names: Vec<&str> = Platform::ALL.iter().map(|p| p.dir_name()).collect();
-    assert_eq!(names, vec!["GBA", "GBAV", "GBC", "GB"]);
+    assert_eq!(names, vec!["GBA", "GBAV", "GBC", "GB", "PICO8"]);
 }
 
 #[cfg(not(feature = "nds"))]
@@ -12,7 +12,13 @@ fn every_platform_has_a_directory() {
 fn every_platform_is_a_shelf_of_its_own() {
     assert_eq!(
         Platform::ALL,
-        [Platform::Gba, Platform::Gbav, Platform::Gbc, Platform::Gb]
+        [
+            Platform::Gba,
+            Platform::Gbav,
+            Platform::Gbc,
+            Platform::Gb,
+            Platform::Pico8
+        ]
     );
     for (i, p) in Platform::ALL.iter().enumerate() {
         assert!(
@@ -61,7 +67,8 @@ fn nds_is_a_platform_with_its_own_folder() {
             Platform::Gba,
             Platform::Gbav,
             Platform::Gbc,
-            Platform::Gb
+            Platform::Gb,
+            Platform::Pico8
         ]
     );
 }
@@ -70,4 +77,16 @@ fn nds_is_a_platform_with_its_own_folder() {
 #[test]
 fn an_sp_build_has_no_nds_platform() {
     assert!(Platform::ALL.iter().all(|p| p.dir_name() != "NDS"));
+}
+
+#[test]
+fn pico8_is_a_platform_with_its_own_folder() {
+    use std::path::Path;
+    assert_eq!(Platform::Pico8.dir_name(), "PICO8");
+    assert_eq!(Platform::Pico8.name(), "PICO-8");
+    assert_eq!(Platform::Pico8.picture(), (128, 128));
+    assert_eq!(Platform::Pico8.hardware(), Platform::Pico8);
+    assert!(Platform::Pico8.accepts(Path::new("celeste.p8.png")));
+    assert!(!Platform::Gba.accepts(Path::new("celeste.p8")));
+    assert_eq!(Platform::ALL.last(), Some(&Platform::Pico8));
 }

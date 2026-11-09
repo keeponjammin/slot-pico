@@ -105,6 +105,20 @@ if [ -f "$logo" ] && ! cmp -s "$logo" "$SD/Cache/bootlogo.installed"; then
 fi
 
 [ -f "$LOGS/slot.log" ] && mv -f "$LOGS/slot.log" "$LOGS/slot.log.1"
-log "exec $SYS/slot"
+[ -f "$LOGS/pico8.log" ] && mv -f "$LOGS/pico8.log" "$LOGS/pico8.log.1"
 
-exec "$LOADER" "$SYS/slot" > "$LOGS/slot.log" 2>&1
+# slot hands the device to PICO-8 by leaving slot.next and exiting. Run it,
+# then start slot again. Any other exit ends the session as before.
+NEXT="$RUN/slot.next"
+rm -f "$NEXT"
+: > "$LOGS/slot.log"
+while :; do
+	log "exec $SYS/slot"
+	"$LOADER" "$SYS/slot" >> "$LOGS/slot.log" 2>&1
+	status=$?
+	[ -s "$NEXT" ] || exit "$status"
+	log "hand off to pico-8: $(tr '\n' ' ' < "$NEXT")"
+	"$LOADER" "$SYS/slot" --pico8 >> "$LOGS/pico8.log" 2>&1
+	log "pico-8 exited $?"
+	rm -f "$NEXT"
+done

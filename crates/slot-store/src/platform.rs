@@ -9,18 +9,26 @@ pub enum Platform {
     Gbav,
     #[cfg(feature = "nds")]
     Nds,
+    Pico8,
 }
 
 impl Platform {
     #[cfg(not(feature = "nds"))]
-    pub const ALL: [Platform; 4] = [Platform::Gba, Platform::Gbav, Platform::Gbc, Platform::Gb];
-    #[cfg(feature = "nds")]
     pub const ALL: [Platform; 5] = [
+        Platform::Gba,
+        Platform::Gbav,
+        Platform::Gbc,
+        Platform::Gb,
+        Platform::Pico8,
+    ];
+    #[cfg(feature = "nds")]
+    pub const ALL: [Platform; 6] = [
         Platform::Nds,
         Platform::Gba,
         Platform::Gbav,
         Platform::Gbc,
         Platform::Gb,
+        Platform::Pico8,
     ];
 
     pub fn name(self) -> &'static str {
@@ -31,6 +39,7 @@ impl Platform {
             Platform::Gbav => "Game Boy Advance Video",
             #[cfg(feature = "nds")]
             Platform::Nds => "Nintendo DS",
+            Platform::Pico8 => "PICO-8",
         }
     }
 
@@ -42,6 +51,7 @@ impl Platform {
             Platform::Gbav => "GBAV",
             #[cfg(feature = "nds")]
             Platform::Nds => "NDS",
+            Platform::Pico8 => "PICO8",
         }
     }
 
@@ -58,6 +68,7 @@ impl Platform {
             Platform::Gb | Platform::Gbc => &["gb", "gbc"],
             #[cfg(feature = "nds")]
             Platform::Nds => &["nds"],
+            Platform::Pico8 => &["p8", "p8.png"],
         }
     }
 
@@ -67,16 +78,28 @@ impl Platform {
             Platform::Gb | Platform::Gbc => (160, 144),
             #[cfg(feature = "nds")]
             Platform::Nds => (256, 192),
+            Platform::Pico8 => (128, 128),
         }
     }
 
     pub fn accepts(self, path: &Path) -> bool {
-        path.extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|ext| {
-                self.extensions()
-                    .iter()
-                    .any(|k| ext.eq_ignore_ascii_case(k))
-            })
+        self.stem_of(path).is_some()
+    }
+
+    /// The name a game file is listed under: its name without the
+    /// extension, where PICO-8's `.p8.png` counts as one extension.
+    pub fn stem_of(self, path: &Path) -> Option<&str> {
+        let name = path.file_name()?.to_str()?;
+        self.extensions().iter().find_map(|ext| {
+            let cut = name.len().checked_sub(ext.len() + 1)?;
+            let (stem, tail) = (name.get(..cut)?, name.get(cut..)?);
+            (!stem.is_empty() && tail.starts_with('.') && tail[1..].eq_ignore_ascii_case(ext))
+                .then_some(stem)
+        })
+    }
+
+    /// Games that slot hands to another program instead of running a core.
+    pub fn runs_outside(self) -> bool {
+        self == Platform::Pico8
     }
 }

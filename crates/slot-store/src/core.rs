@@ -74,6 +74,7 @@ impl Core {
             Platform::Gb | Platform::Gbc => [Core::Mgba, Core::Gambatte],
             #[cfg(feature = "nds")]
             Platform::Nds => [Core::Dsperate, Core::Dsperate],
+            Platform::Pico8 => [Core::Mgba, Core::Mgba],
         }
     }
 }

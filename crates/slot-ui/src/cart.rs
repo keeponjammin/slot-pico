@@ -68,6 +68,8 @@ struct Spec {
 enum Shape {
     Gba,
     Gb(GbShell),
+    /// A rounded pak embossed PICO-8 instead of GAME BOY COLOR.
+    Pico8,
     #[cfg(feature = "nds")]
     Ds,
 }
@@ -86,6 +88,7 @@ const DS_LABEL: (u32, u32, u32, u32) = (DS_LABEL_X, DS_LABEL_Y, DS_LABEL_W, DS_L
 pub fn folder_gb_shell(cart: &Cart) -> Option<GbShell> {
     match cart.platform {
         Platform::Gba | Platform::Gbav => None,
+        Platform::Pico8 => Some(GbShell::Rounded),
         #[cfg(feature = "nds")]
         Platform::Nds => None,
         Platform::Gb | Platform::Gbc => Some(match cart.shell.map(|c| c.outline) {
@@ -113,6 +116,7 @@ pub fn shelf_shape(cart: &Cart) -> (Option<GbShell>, bool) {
         (Platform::Gba | Platform::Gbav, _) => None,
         #[cfg(feature = "nds")]
         (Platform::Nds, _) => None,
+        (Platform::Pico8, _) => Some(GbShell::Rounded),
         (_, Some(Outline::Notched)) => Some(GbShell::Notched),
         (_, Some(Outline::Rounded)) => Some(GbShell::Rounded),
         _ => match slot_store::header_index::peek_gb_header(&cart.rom).flatten() {
@@ -127,6 +131,7 @@ pub fn shelf_shape(cart: &Cart) -> (Option<GbShell>, bool) {
 pub fn gb_shell_of(cart: &Cart) -> Option<GbShell> {
     match cart.platform {
         Platform::Gba | Platform::Gbav => None,
+        Platform::Pico8 => Some(GbShell::Rounded),
         #[cfg(feature = "nds")]
         Platform::Nds => None,
         Platform::Gb | Platform::Gbc => Some(match cart.shell.map(|c| c.outline) {
@@ -155,6 +160,9 @@ pub fn label_rect(shell: Option<GbShell>) -> (f32, f32, f32, f32) {
 }
 
 fn shape_of(cart: &Cart) -> Shape {
+    if cart.platform == Platform::Pico8 {
+        return Shape::Pico8;
+    }
     #[cfg(feature = "nds")]
     if cart.platform == Platform::Nds {
         return Shape::Ds;
@@ -167,6 +175,10 @@ fn shape_of(cart: &Cart) -> Shape {
 
 fn spec(shape: Shape) -> Spec {
     match shape {
+        Shape::Pico8 => Spec {
+            mould: Mould::Pico8,
+            ..spec(Shape::Gb(GbShell::Rounded))
+        },
         Shape::Gba => Spec {
             w: CART_W,
             h: CART_H,
@@ -213,7 +225,7 @@ pub fn seated_box(platform: Platform) -> (u32, u32) {
         Platform::Gba | Platform::Gbav => (SEATED_W, SEATED_H),
         #[cfg(feature = "nds")]
         Platform::Nds => ((SEATED_H * bitmaps::DS_CART_W + bitmaps::DS_CART_H / 2) / bitmaps::DS_CART_H, SEATED_H),
-        Platform::Gb | Platform::Gbc => (SEATED_W, GB_SEATED_H),
+        Platform::Gb | Platform::Gbc | Platform::Pico8 => (SEATED_W, GB_SEATED_H),
     }
 }
 
@@ -223,6 +235,7 @@ pub fn cart_box(platform: Platform) -> (u32, u32) {
         #[cfg(feature = "nds")]
         Platform::Nds => Shape::Ds,
         Platform::Gb | Platform::Gbc => Shape::Gb(GbShell::Notched),
+        Platform::Pico8 => Shape::Pico8,
     });
     (s.w, s.h)
 }
@@ -463,6 +476,7 @@ pub fn neutral_shell(mould: Mould, clear: bool) -> Vec<u8> {
         Mould::Gba => Shape::Gba,
         Mould::Notched => Shape::Gb(GbShell::Notched),
         Mould::Rounded => Shape::Gb(GbShell::Rounded),
+        Mould::Pico8 => Shape::Pico8,
         #[cfg(feature = "nds")]
         Mould::Ds => Shape::Ds,
     };
@@ -528,6 +542,7 @@ fn dress(s: &Spec, rgba: &mut [u8]) {
         Mould::Gba => "GAME BOY ADVANCE",
         Mould::Notched => "GAME BOY",
         Mould::Rounded => "GAME BOY COLOR",
+        Mould::Pico8 => "PICO-8",
         #[cfg(feature = "nds")]
         Mould::Ds => "NINTENDO DS",
     };

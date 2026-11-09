@@ -19,6 +19,7 @@ pub struct Cart {
 impl Cart {
     pub fn read_header(&mut self) {
         match self.platform.hardware() {
+            Platform::Pico8 => {}
             Platform::Gba => {
                 if let Some((title, code)) = header_title_code(&self.rom) {
                     self.title = title;
@@ -90,7 +91,7 @@ fn scan_of(root: &Path, platforms: &[Platform]) -> Result<Vec<Cart>, StoreError>
             if is_hidden(&rom) || !platform.accepts(&rom) || !is_file(&entry) {
                 continue;
             }
-            let Some(stem) = rom.file_stem().and_then(|s| s.to_str()) else {
+            let Some(stem) = platform.stem_of(&rom) else {
                 continue;
             };
             let label = labels

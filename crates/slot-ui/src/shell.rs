@@ -73,6 +73,8 @@ const GB_OVERSEAS_TITLES: &[(&str, Shell)] = &[
     ("POKEMON YEL", shell([0xe9, 0xa8, 0x26], Finish::Solid)),
 ];
 
+/// PICO-8's dark blue, colour 1 of its palette.
+const PICO8_SHELL: Shell = shell([0x1d, 0x2b, 0x53], Finish::Solid);
 const CRYSTAL: Shell = shell([0x86, 0xb9, 0xbf], Finish::Glitter);
 const KIRBY: Shell = shell([0xec, 0x94, 0xb4], Finish::Translucent);
 
@@ -82,6 +84,7 @@ pub fn shell_for(cart: &Cart) -> Shell {
     }
     match cart.platform {
         Platform::Gba | Platform::Gbav => gba_shell_for(&gba_code(cart)),
+        Platform::Pico8 => PICO8_SHELL,
         #[cfg(feature = "nds")]
         Platform::Nds => gba_shell_for(""),
         Platform::Gb | Platform::Gbc => gb_shell_for(&cart.rom),
@@ -99,6 +102,7 @@ pub fn indexed_shell(cart: &Cart) -> Option<Shell> {
         },
         #[cfg(feature = "nds")]
         Platform::Nds => None,
+        Platform::Pico8 => Some(PICO8_SHELL),
         Platform::Gb | Platform::Gbc => slot_store::header_index::peek_gb_header(&cart.rom)
             .map(|h| gb_shell_from(h.as_ref(), &cart.rom)),
     }

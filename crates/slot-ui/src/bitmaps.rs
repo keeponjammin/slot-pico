@@ -9,6 +9,7 @@ pub enum Mould {
     Gba,
     Notched,
     Rounded,
+    Pico8,
     #[cfg(feature = "nds")]
     Ds,
 }
@@ -364,6 +365,18 @@ pub fn ds_cart_mask() -> &'static [u8] {
     })
 }
 
+/// The PICO-8 shell has no raster in `assets`: it is the Game Boy Color mould
+/// embossed PICO-8, built the way `raster_templates` builds the others, once.
+fn pico8_shell(clear: bool) -> &'static [u8] {
+    static SOLID: OnceLock<Vec<u8>> = OnceLock::new();
+    static CLEAR: OnceLock<Vec<u8>> = OnceLock::new();
+    match clear {
+        true => &CLEAR,
+        false => &SOLID,
+    }
+    .get_or_init(|| crate::cart::neutral_shell(Mould::Pico8, clear))
+}
+
 #[cfg(feature = "nds")]
 pub fn ds_cart() -> &'static [u8] {
     static PAINT: OnceLock<Vec<u8>> = OnceLock::new();
@@ -396,6 +409,7 @@ pub fn shell_asset(mould: Mould, clear: bool) -> &'static [u8] {
         (Mould::Gba, true) => (GBA_CLEAR_PNG, GBA_CART_W, GBA_CART_H, &GBA_CLEAR),
         (Mould::Notched, true) => (GB_CLEAR_PNG, GB_CART_W, GB_CART_H, &GB_CLEAR),
         (Mould::Rounded, true) => (GBC_CLEAR_PNG, GB_CART_W, GB_CART_H, &GBC_CLEAR),
+        (Mould::Pico8, clear) => return pico8_shell(clear),
         #[cfg(feature = "nds")]
         (Mould::Ds, _) => return ds_cart(),
     };
