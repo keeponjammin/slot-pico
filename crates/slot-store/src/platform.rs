@@ -97,9 +97,4 @@ impl Platform {
                 .then_some(stem)
         })
     }
-
-    /// Games that slot hands to another program instead of running a core.
-    pub fn runs_outside(self) -> bool {
-        self == Platform::Pico8
-    }
 }

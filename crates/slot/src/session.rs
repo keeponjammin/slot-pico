@@ -549,8 +549,9 @@ impl Session {
             Phase::Inserting { cart, .. } => cart.clone(),
             _ => return,
         };
-        // A cart that runs outside slot, like PICO-8, has no core: slot hands it over instead.
-        if self.app.seated_cart().is_some_and(|c| c.platform.runs_outside()) {
+        // A cart played by another program, like the owner's PICO-8, has no core: slot hands
+        // it over instead.
+        if self.app.seated_outside() {
             return;
         }
         if self.emu.is_none() && self.opening.is_none() {

@@ -7,7 +7,7 @@ use slot::app::{App, Phase};
 use slot::input::evdev::Keymap;
 use slot::pico8::{self, Launch, Pad};
 use slot_input::Btn;
-use slot_store::{Platform, SlotState};
+use slot_store::{Core, Platform, SlotState};
 use tempfile::TempDir;
 
 fn install(root: &Path) {
@@ -83,8 +83,33 @@ fn pico8_carts_are_p8_text_and_p8_png_pictures() {
         Some("Emerald.v1")
     );
     assert!(!Platform::Gb.accepts(Path::new("celeste.p8")));
-    assert!(Platform::Pico8.runs_outside());
-    assert!(!Platform::Gba.runs_outside());
+}
+
+#[test]
+fn pico8_carts_play_on_fake08_unless_set_to_the_owners_pico8() {
+    let d = TempDir::new().unwrap();
+    let gb = slot_store::Core::Mgba;
+    assert_eq!(
+        Core::pair(Platform::Pico8),
+        [Core::Fake08, Core::Pico8],
+        "the core picker flips between fake-08 and PICO-8"
+    );
+    assert_eq!(
+        slot_store::core_for_platform(d.path(), "celeste", Platform::Pico8, gb),
+        Core::Fake08
+    );
+    slot_store::write_selected_core(d.path(), Platform::Pico8, "celeste", Core::Pico8).unwrap();
+    assert_eq!(
+        slot_store::core_for_platform(d.path(), "celeste", Platform::Pico8, gb),
+        Core::Pico8
+    );
+    assert!(Core::Pico8.runs_outside());
+    assert!(!Core::Fake08.runs_outside());
+    assert!(
+        !Core::Mgba.runs(Platform::Pico8),
+        "mGBA does not play PICO-8 carts"
+    );
+    assert!(!Core::Fake08.runs(Platform::Gbc));
 }
 
 #[test]
@@ -421,6 +446,11 @@ fn hand_off_through(dir: &Path) -> std::sync::MutexGuard<'static, ()> {
     held
 }
 
+/// Plays `stem` on the owner's own PICO-8 instead of fake-08.
+fn on_pico8(root: &Path, stem: &str) {
+    slot_store::write_selected_core(root, Platform::Pico8, stem, Core::Pico8).unwrap();
+}
+
 fn to_pico8_shelf(a: &mut App) {
     for _ in 0..8 {
         if a.shelf_platform_name() == Some("PICO-8") {
@@ -442,6 +472,7 @@ fn playing_a_pico8_cart_hands_the_device_over_and_comes_back_to_it() {
     install(d.path());
     write_cart(d.path(), "celeste.p8", p8_with_label('c').as_bytes());
     write_cart(d.path(), "jelpi.p8", b"");
+    on_pico8(d.path(), "jelpi");
     slot::root::ensure(d.path());
     // A second shelf, so there is a shelf to name.
     std::fs::write(d.path().join("Games/GBA/Emerald.gba"), [0u8; 512]).unwrap();
@@ -537,6 +568,7 @@ fn ejecting_a_pico8_cart_while_it_goes_in_keeps_slot_running() {
     let _turn = hand_off_through(&run);
     install(d.path());
     write_cart(d.path(), "celeste.p8", b"");
+    on_pico8(d.path(), "celeste");
     slot::root::ensure(d.path());
     std::fs::write(d.path().join("Games/GBA/Emerald.gba"), [0u8; 512]).unwrap();
     common::clocked(d.path());
@@ -557,9 +589,10 @@ fn ejecting_a_pico8_cart_while_it_goes_in_keeps_slot_running() {
 }
 
 #[test]
-fn a_pico8_cart_is_refused_until_pico8_is_installed() {
+fn a_cart_set_to_pico8_is_refused_until_pico8_is_installed() {
     let d = TempDir::new().unwrap();
     write_cart(d.path(), "celeste.p8", b"");
+    on_pico8(d.path(), "celeste");
     slot::root::ensure(d.path());
     // A second shelf, so there is a shelf to name.
     std::fs::write(d.path().join("Games/GBA/Emerald.gba"), [0u8; 512]).unwrap();
@@ -569,6 +602,55 @@ fn a_pico8_cart_is_refused_until_pico8_is_installed() {
     common::through(&mut a, Btn::A);
     assert!(!a.relaunching());
     assert!(matches!(a.phase(), Phase::Shelf), "{:?}", a.phase());
+}
+
+#[test]
+fn a_fake08_cart_goes_in_like_any_other_without_pico8_installed() {
+    let d = TempDir::new().unwrap();
+    let run = d.path().join("run");
+    let _turn = hand_off_through(&run);
+    write_cart(d.path(), "celeste.p8", b"");
+    slot::root::ensure(d.path());
+    std::fs::write(d.path().join("Games/GBA/Emerald.gba"), [0u8; 512]).unwrap();
+    common::clocked(d.path());
+    let mut a = App::boot(d.path());
+    to_pico8_shelf(&mut a);
+    common::through(&mut a, Btn::A);
+    assert!(
+        matches!(a.phase(), Phase::Inserting { cart, .. } if cart == "celeste"),
+        "fake-08 needs no PICO-8 of the owner's: {:?}",
+        a.phase()
+    );
+    for _ in 0..120 {
+        a.update(1.0 / 60.0);
+        assert!(!a.relaunching(), "a fake-08 cart was handed to PICO-8");
+    }
+    assert!(!a.seated_outside());
+    assert!(!run.join(pico8::NEXT_FILE).exists());
+}
+
+#[test]
+fn the_splore_card_always_opens_the_owners_pico8() {
+    let d = TempDir::new().unwrap();
+    let run = d.path().join("run");
+    let _turn = hand_off_through(&run);
+    install(d.path());
+    slot::root::ensure(d.path());
+    pico8::stock_shelf(d.path());
+    std::fs::write(d.path().join("Games/GBA/Emerald.gba"), [0u8; 512]).unwrap();
+    common::clocked(d.path());
+    let mut a = App::boot(d.path());
+    to_pico8_shelf(&mut a);
+    assert_eq!(a.selected_stem(), Some(pico8::SPLORE));
+    common::through(&mut a, Btn::A);
+    let mut frames = 0;
+    while !a.relaunching() {
+        a.update(1.0 / 60.0);
+        frames += 1;
+        assert!(frames < 120, "Splore never handed off: {:?}", a.phase());
+    }
+    let next = std::fs::read_to_string(run.join(pico8::NEXT_FILE)).unwrap();
+    assert_eq!(Launch::decode(&next), Some(Launch::Splore));
 }
 
 #[test]
