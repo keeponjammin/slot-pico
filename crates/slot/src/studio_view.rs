@@ -436,8 +436,9 @@ const CHIP_EDGE: f32 = 26.0;
 const SCROLL_W: f32 = 4.0;
 pub const CART_TILT: f32 = -7.0;
 const GB_ART_INSET: f32 = 10.0;
-/// How far the PICO-8 cart's art stands in from its sides, at its own width.
-const PICO8_ART_INSET: f32 = 10.0;
+/// How far the PICO-8 cart's art stands in from its sides, at its own width: none, its slab
+/// fills the art edge to edge.
+const PICO8_ART_INSET: f32 = 0.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tray {

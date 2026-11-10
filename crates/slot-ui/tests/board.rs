@@ -455,3 +455,35 @@ fn a_gba_cart_keeps_the_gba_picker_geometry() {
     }
     assert_eq!(slot_ui::seats(slot_ui::CartShape::Gba), slot_ui::GBA_SEATS);
 }
+
+#[test]
+fn a_pico8_cart_seats_its_own_chips_on_its_own_board() {
+    let seats = slot_ui::seats(slot_ui::CartShape::Pico8);
+    assert_eq!(seats, slot_ui::PICO8_SEATS);
+    assert_ne!(
+        seats,
+        slot_ui::seats(slot_ui::CartShape::Gb(slot_ui::GbShell::Notched))
+    );
+    let board = slot_ui::Placed {
+        x: 0.0,
+        y: 0.0,
+        w: slot_ui::PICO8_CART_W as f32,
+        h: slot_ui::PICO8_CART_H as f32,
+    };
+    for u in seats.chip_u {
+        let (x, y) = seats.at(board, u, seats.chip_v);
+        assert!(x >= 0.0 && x + seats.chip_size.0 <= board.w, "a chip hangs off the board at {x}");
+        assert!(y >= 0.0 && y + seats.chip_size.1 <= board.h);
+    }
+    let [a, b] = seats.chip_u;
+    assert!(a + seats.chip_size.0 <= b, "the two seats overlap");
+
+    let named = slot_ui::pico8_chip_face(Some(slot_store::Core::Fake08));
+    let blank = slot_ui::pico8_chip_face(None);
+    assert_eq!((named.w, named.h), (blank.w, blank.h));
+    assert_ne!(named.rgba, blank.rgba, "the chip does not say which core it is");
+    assert_ne!(
+        slot_ui::pico8_chip_face(Some(slot_store::Core::Pico8)).rgba,
+        named.rgba
+    );
+}

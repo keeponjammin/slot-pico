@@ -58,7 +58,7 @@ pub use battery::{draw_gauge, BOLT_PX, GAUGE_H, GAUGE_W, WALL};
 pub use board::{
     bare_board_face, baseos_cart_face, board_at, board_face, board_from, board_from_shaped,
     board_in, board_x, board_zoom, chip_face, chip_face_text, chip_shadow_face, gb_chip_face,
-    gb_socket_face, grown, lid_at,
+    gb_socket_face, grown, lid_at, pico8_chip_face, pico8_socket_face, PICO8_SEATS,
     lid_from, lid_from_shaped, lift_of, on_board, padded, rom_marking, rom_marking_face, seats,
     shelf_cart, shelf_cart_at, shelf_cart_shaped, slide_of, socket_face, socket_face_text,
     update_cart_face, Placed, Seats, BOARD_H, BOARD_W, BOARD_Y, CHIP_H, CHIP_TIP, CHIP_U, CHIP_V,
@@ -74,8 +74,9 @@ pub use cart::{
     GB_LABEL_W, GB_LABEL_X, GB_LABEL_Y, LABEL_H, LABEL_W, LABEL_WELL, LABEL_X, LABEL_Y,
 };
 pub use pico8_cart::{
-    pico8_silhouette, PICO8_CART_H, PICO8_CART_W, PICO8_LABEL_H, PICO8_LABEL_W, PICO8_LABEL_X,
-    PICO8_LABEL_Y,
+    pico8_silhouette, pixel_text_w, print_strip, strip_lines, PICO8_CART_H, PICO8_CART_W, PICO8_CHIP_H,
+    PICO8_CHIP_W, PICO8_LABEL_H, PICO8_LABEL_W, PICO8_LABEL_X, PICO8_LABEL_Y, PICO8_SEATED_H,
+    PICO8_STRIP,
 };
 #[cfg(feature = "nds")]
 pub use cart::{DS_LABEL_H, DS_LABEL_W, DS_LABEL_X, DS_LABEL_Y};

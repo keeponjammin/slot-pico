@@ -5,8 +5,8 @@ use crate::art;
 use crate::bitmaps::{self, Mould};
 use crate::board::{BOARD_H, BOARD_W};
 use crate::pico8_cart::{
-    pico8_cart_mask, PICO8_CART_H, PICO8_CART_W, PICO8_LABEL_H, PICO8_LABEL_W, PICO8_LABEL_X,
-    PICO8_LABEL_Y,
+    pico8_cart_mask, print_strip, PICO8_CART_H, PICO8_CART_W, PICO8_LABEL_H, PICO8_LABEL_W,
+    PICO8_LABEL_X, PICO8_LABEL_Y, PICO8_SEATED_H,
 };
 use crate::shell::{shell_for, Finish, Shell};
 use crate::silhouette::{cart_mask, gb_cart_mask, GbShell};
@@ -86,7 +86,8 @@ impl CartShape {
         CartShape::Pico8,
     ];
 
-    /// A cart that stands as tall as a pak, with the pak's board and seats.
+    /// A cart that stands tall on the shelf, as a pak or a PICO-8 cart does, rather than lying
+    /// wide as a GBA cart does.
     pub fn tall(self) -> bool {
         self != CartShape::Gba
     }
@@ -262,12 +263,13 @@ pub fn seated_box(platform: Platform) -> (u32, u32) {
         #[cfg(feature = "nds")]
         Platform::Nds => ((SEATED_H * bitmaps::DS_CART_W + bitmaps::DS_CART_H / 2) / bitmaps::DS_CART_H, SEATED_H),
         Platform::Gb | Platform::Gbc => (SEATED_W, GB_SEATED_H),
-        Platform::Pico8 => (SEATED_W, PICO8_SEATED_H),
+        // Narrower than the slot, as tall as a pak stands: its own width, from its own shape.
+        Platform::Pico8 => (
+            (PICO8_SEATED_H * PICO8_CART_W + PICO8_CART_H / 2) / PICO8_CART_H,
+            PICO8_SEATED_H,
+        ),
     }
 }
-
-/// How tall a PICO-8 cart stands seated, at the slot's width.
-const PICO8_SEATED_H: u32 = (SEATED_W * PICO8_CART_H + PICO8_CART_W / 2) / PICO8_CART_W;
 
 pub fn cart_box(platform: Platform) -> (u32, u32) {
     let s = spec(match platform {
@@ -355,7 +357,7 @@ pub fn cart_interior(cart: &Cart) -> CartFace {
 
 /// The board a clear cart's plastic is drawn over, between the back and front shells. A GBA cart
 /// gets `board.png`. A pak gets `gb_board.png`, cut to the notched or rounded outline. A
-/// PICO-8 cart has no board drawn for it yet, so it shows the pak's, cut to its own outline.
+/// PICO-8 cart gets its own board, `pico8_board.png`, cut to its own outline.
 pub fn cart_backing(shape: CartShape) -> CartFace {
     match shape {
         CartShape::Gba => CartFace {
@@ -364,7 +366,7 @@ pub fn cart_backing(shape: CartShape) -> CartFace {
             h: BOARD_H,
         },
         CartShape::Gb(shell) => gb_backing(bitmaps::gb_board(), shell),
-        CartShape::Pico8 => shaped_backing(bitmaps::gb_board(), CartShape::Pico8),
+        CartShape::Pico8 => shaped_backing(bitmaps::pico8_board(), CartShape::Pico8),
     }
 }
 
@@ -394,6 +396,9 @@ pub fn label_size(cart: &Cart) -> (u32, u32) {
 pub fn bare_face(cart: &Cart) -> CartFace {
     let s = spec(shape_of(cart));
     let mut face = shell_face_of(&s, &shell_for(cart), true);
+    if cart.platform == Platform::Pico8 {
+        print_strip(&mut face.rgba, face.w, &label_text(cart));
+    }
     clip_to_silhouette(&s, &mut face);
     face
 }
@@ -415,6 +420,9 @@ pub fn cart_face_with(cart: &Cart, art: Option<Vec<u8>>) -> CartFace {
         }
     };
     paste_label(&s, &mut face, &label);
+    if cart.platform == Platform::Pico8 {
+        print_strip(&mut face.rgba, face.w, &label_text(cart));
+    }
     clip_to_silhouette(&s, &mut face);
     face
 }

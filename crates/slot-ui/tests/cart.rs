@@ -832,3 +832,63 @@ fn a_pico8_cart_takes_the_colour_its_owner_picks() {
     let [r, g, b] = pixel(&cart_face(&pico8_cart(Some(red))), beside_label.0, beside_label.1);
     assert!(r > 150 && r > g + 100 && r > b + 60, "the picked red did not reach the cart: {:?}", [r, g, b]);
 }
+
+#[test]
+fn an_open_pico8_cart_shows_its_own_board_not_the_paks() {
+    let cart = pico8_cart(None);
+    let board = slot_ui::board_face(&cart);
+    assert_eq!((board.w, board.h), (slot_ui::PICO8_CART_W, slot_ui::PICO8_CART_H));
+    let backing = slot_ui::cart_backing(slot_ui::CartShape::Pico8);
+    assert_eq!((backing.w, backing.h), (board.w, board.h));
+    let pak = slot_ui::cart_backing(slot_ui::CartShape::Gb(GbShell::Rounded));
+    // Nothing of the pak's green board: the PICO-8 board is purple.
+    let green = board
+        .rgba
+        .chunks_exact(4)
+        .filter(|p| {
+            let [r, g, b] = [p[0], p[1], p[2]].map(u16::from);
+            p[3] > 200 && g > r + 30 && g > b + 30
+        })
+        .count();
+    assert!(
+        green < 50,
+        "{green} green pixels on the PICO-8 board: it is the pak's"
+    );
+    assert_ne!(backing.rgba.len(), pak.rgba.len());
+}
+
+#[test]
+fn a_pico8_cart_stands_narrower_than_the_slot_and_as_tall_as_a_pak() {
+    let (w, h) = slot_ui::seated_box(Platform::Pico8);
+    assert_eq!(h, slot_ui::seated_box(Platform::Gb).1);
+    assert!(w < slot_ui::seated_box(Platform::Gb).0);
+    let aspect = slot_ui::PICO8_CART_W as f32 / slot_ui::PICO8_CART_H as f32;
+    assert!((w as f32 / h as f32 - aspect).abs() < 0.01);
+}
+
+#[test]
+fn a_pico8_strip_carries_the_title_then_the_carts_own_line() {
+    assert_eq!(
+        slot_ui::strip_lines("celeste"),
+        ["celeste", "PICO-8 CARTRIDGE"]
+    );
+    let long = slot_ui::strip_lines("the adventures of jelpi in the land of the very long names");
+    assert_eq!(long.len(), 3);
+    assert!(long[1].ends_with(".."));
+    assert_eq!(long[2], "PICO-8 CARTRIDGE");
+    for line in &long {
+        assert!(
+            slot_ui::pixel_text_w(line) * 2 <= slot_ui::PICO8_STRIP.2,
+            "{line} runs off the strip"
+        );
+    }
+
+    // The strip is printed: light letters on the dark strip, whatever the shell.
+    let face = cart_face(&pico8_cart(None));
+    let (sx, sy, sw, sh) = slot_ui::PICO8_STRIP;
+    let lit = (sy..sy + sh)
+        .flat_map(|y| (sx..sx + sw).map(move |x| (x, y)))
+        .filter(|&(x, y)| pixel(&face, x, y).iter().all(|c| *c > 180))
+        .count();
+    assert!(lit > 100, "only {lit} lit pixels on the strip");
+}
