@@ -773,6 +773,7 @@ mod runner {
         let volume = match &shared {
             Some(s) => {
                 s.set_volume(crate::pico8_hud::output_volume(&state, headphones));
+                s.set_gain(crate::pico8_hud::screen_gain(&state));
                 256
             }
             None => volume(&state, headphones),
@@ -1026,6 +1027,7 @@ mod runner {
                             platform.set_backlight(sleep.backlight);
                         }
                         s.set_volume(output_volume(state, headphones));
+                        s.set_gain(crate::pico8_hud::screen_gain(state));
                         hud.set_headphones(headphones);
                         hud.show(shown.kind, shown.value, shown.muted, now);
                         hud_drawn = None;

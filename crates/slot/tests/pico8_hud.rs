@@ -169,3 +169,56 @@ fn the_shared_file_is_laid_out_as_the_shim_reads_it() {
     drop(shared);
     assert!(!path.exists(), "the file outlived the runner");
 }
+
+#[test]
+fn blue_light_steps_from_0_to_9_and_shows_its_own_bar() {
+    let (mut l, mut s) = (Levels::default(), state(50));
+    let shown = l.act(&mut s, false, Action::BlueLightUp, 0).unwrap();
+    assert_eq!((shown.kind, shown.value), (HudKind::BlueLight, 1));
+    for t in 0..20 {
+        l.act(&mut s, false, Action::BlueLightUp, 10 + t);
+    }
+    assert_eq!(s.blue_light, slot_store::BLUE_LIGHT_MAX);
+    for t in 0..20 {
+        l.act(&mut s, false, Action::BlueLightDown, 100 + t);
+    }
+    assert_eq!(s.blue_light, 0);
+}
+
+#[test]
+fn the_screen_gain_is_the_compositors_blue_light_times_dim() {
+    let mut s = state(50);
+    assert_eq!(slot::pico8_hud::screen_gain(&s), [1.0; 3]);
+    s.blue_light = slot_store::BLUE_LIGHT_MAX;
+    s.dim = 2;
+    let dim = slot_gfx::dim_gain(2);
+    let warm = slot_gfx::blue_light_gain(slot_store::BLUE_LIGHT_MAX);
+    assert_eq!(slot::pico8_hud::screen_gain(&s), warm.map(|g| g * dim));
+}
+
+#[cfg(unix)]
+#[test]
+fn the_gain_is_shared_as_fixed_point() {
+    use slot::pico8_hud::{layout, Shared};
+    let d = tempfile::TempDir::new().unwrap();
+    let path = d.path().join("hud");
+    let shared = Shared::create(&path).unwrap();
+    let word = |i: usize| {
+        let bytes = std::fs::read(&path).unwrap();
+        u32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap())
+    };
+    assert_eq!(
+        word(layout::W_GAIN),
+        layout::GAIN_ONE,
+        "a new file starts untinted"
+    );
+    shared.set_gain([1.0, 0.5, 0.0]);
+    assert_eq!(
+        [
+            word(layout::W_GAIN),
+            word(layout::W_GAIN + 1),
+            word(layout::W_GAIN + 2)
+        ],
+        [65535, 32768, 0]
+    );
+}

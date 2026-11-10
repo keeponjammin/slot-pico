@@ -18,6 +18,8 @@
  * - SDL_OpenAudio: PICO-8 starts at full volume, and its audio callback is
  *   wrapped to scale every sample by slot's curve, (volume / 100)^2, as
  *   slot's own audio does (crates/slot/src/audio/volume.rs).
+ * - SDL_RenderCopy: what PICO-8 draws is tinted by slot's blue light and
+ *   dim gain, as slot's compositor tints every frame of its own games.
  * - SDL_RenderPresent: while slot shows its HUD, the strip it drew is laid
  *   over the top of each frame. PICO-8 only redraws pixels that change, so
  *   whatever is drawn over it stays until PICO-8 draws there again. The
@@ -74,9 +76,21 @@ struct hud {
 	volatile uint32_t volume; /* 0..100 */
 	volatile uint32_t shown;  /* 1 while the strip should be on screen */
 	volatile uint32_t w, h;   /* the strip, premultiplied RGBA, top down */
+	volatile uint32_t gain[3]; /* slot's screen tint, 65535 is 1 */
 };
 
+#define GAIN_ONE 65535u
+
 static struct hud *hud;
+
+/* A gain as an 8-bit factor, the way SDL's colour modulation takes it. */
+static uint8_t gain8(int i)
+{
+	uint32_t g = hud->gain[i];
+	if (g > GAIN_ONE)
+		g = GAIN_ONE;
+	return (uint8_t)((g * 255u + GAIN_ONE / 2) / GAIN_ONE);
+}
 
 static struct hud *shared(void)
 {
@@ -545,9 +559,12 @@ static void draw_region(int win_h)
 }
 
 /* Lays `strip` (premultiplied, top down, sw by sh) over `clean`, scaled to
- * the region with the nearest pixel. Both region buffers run bottom up. */
+ * the region with the nearest pixel. Both region buffers run bottom up.
+ * The strip gets slot's tint, as slot's compositor tints its HUD with the
+ * rest of the frame; `clean` already has it from SDL_RenderCopy. */
 static void composite(void)
 {
+	uint32_t tint[3] = { gain8(0), gain8(1), gain8(2) };
 	for (int y = 0; y < ov.rows; y++) {
 		int sy = (ov.rows - 1 - y) * ov.strip_h / ov.rows;
 		for (int x = 0; x < ov.w; x++) {
@@ -557,7 +574,8 @@ static void composite(void)
 			uint32_t keep = 255u - s[3], o = 0;
 			for (int ch = 0; ch < 3; ch++) {
 				uint32_t under = (c >> (8 * ch)) & 0xff;
-				uint32_t v = s[ch] + (under * keep + 127) / 255;
+				uint32_t ink = (s[ch] * tint[ch] + 127) / 255;
+				uint32_t v = ink + (under * keep + 127) / 255;
 				o |= (v > 255 ? 255 : v) << (8 * ch);
 			}
 			ov.out[(size_t)y * ov.w + x] = o | 0xff000000u;
@@ -634,6 +652,31 @@ static void overlay(void *renderer)
 			ov.history[i].frame = -1;
 	}
 	restore_gl(&s);
+}
+
+/* PICO-8 draws its screen with SDL_RenderCopy: tint it by slot's blue light
+ * and dim gain, as slot's compositor tints its frames. */
+int SDL_RenderCopy(void *renderer, void *texture, const void *src, const void *dst)
+{
+	static int (*real)(void *, void *, const void *, const void *);
+	static int (*color_mod)(void *, uint8_t, uint8_t, uint8_t);
+	static int logged;
+	if (!real) {
+		*(void **)&real = dlsym(RTLD_NEXT, "SDL_RenderCopy");
+		*(void **)&color_mod = dlsym(RTLD_NEXT, "SDL_SetTextureColorMod");
+	}
+	if (!real)
+		return -1;
+	if (shared() && color_mod && texture) {
+		uint8_t r = gain8(0), g = gain8(1), b = gain8(2);
+		color_mod(texture, r, g, b);
+		if (!logged) {
+			logged = 1;
+			fprintf(stderr, "slot: pico8: tint %u %u %u, copies %s to %s\n", r, g, b,
+				src ? "part" : "all", dst ? "a rect" : "the window");
+		}
+	}
+	return real(renderer, texture, src, dst);
 }
 
 void SDL_RenderPresent(void *renderer)

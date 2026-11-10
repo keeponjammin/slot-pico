@@ -6,12 +6,21 @@
 //!
 //! PICO-8 only reads a volume when it starts, so it starts at full and the
 //! shim slot loads into it (cores/pico8-sdl) applies slot's volume to its
-//! audio, with slot's curve. The same shim puts the HUD strip over PICO-8's
-//! frames. Both read a small file in shared memory this module writes.
+//! audio, with slot's curve. The same shim tints what PICO-8 draws by slot's
+//! blue light and dim gain, as slot's compositor tints its frames, and puts
+//! the HUD strip over PICO-8's frames. All of it is read from a small file
+//! in shared memory this module writes.
 
 use slot_input::{Action, Millis, MUTE_CHORD_MS};
-use slot_store::{SlotState, BRIGHTNESS_MAX, DIM_MAX, VOLUME_MAX};
+use slot_store::{SlotState, BLUE_LIGHT_MAX, BRIGHTNESS_MAX, DIM_MAX, VOLUME_MAX};
 use slot_ui::{HudKind, HUD_MS};
+
+/// The gain slot's compositor puts on every frame: the blue light's warm
+/// tint times the dim steps below the backlight.
+pub fn screen_gain(s: &SlotState) -> [f32; 3] {
+    let dim = slot_gfx::dim_gain(s.dim);
+    slot_gfx::blue_light_gain(s.blue_light).map(|g| g * dim)
+}
 
 /// slot's volume step, as in its games.
 pub const VOLUME_STEP: u8 = 5;
@@ -72,9 +81,8 @@ pub fn brightness_level(s: &SlotState) -> u8 {
     DIM_MAX - s.dim.min(DIM_MAX) + s.brightness
 }
 
-/// slot's rules for the volume and brightness keys, as `App::adjust` has
-/// them. The dim steps below the lowest backlight move the bar as in slot,
-/// but PICO-8's screen is not dimmed by them.
+/// slot's rules for the volume keys and the brightness and blue light
+/// shortcuts, as `App::adjust` has them.
 #[derive(Default, Debug)]
 pub struct Levels {
     vol_before: Vec<(u8, bool, Millis)>,
@@ -106,6 +114,17 @@ impl Levels {
                     kind: HudKind::Volume,
                     value: output_volume(s, headphones),
                     muted: to,
+                })
+            }
+            Action::BlueLightUp | Action::BlueLightDown => {
+                s.blue_light = match action {
+                    Action::BlueLightUp => up(s.blue_light, 1, BLUE_LIGHT_MAX),
+                    _ => s.blue_light.saturating_sub(1),
+                };
+                Some(Shown {
+                    kind: HudKind::BlueLight,
+                    value: s.blue_light,
+                    muted: muted(s, headphones),
                 })
             }
             Action::BrightnessUp | Action::BrightnessDown => {
@@ -201,6 +220,9 @@ pub mod layout {
     pub const W_SHOWN: usize = 3;
     pub const W_WIDTH: usize = 4;
     pub const W_HEIGHT: usize = 5;
+    /// `screen_gain`'s red, green and blue, times `GAIN_ONE`.
+    pub const W_GAIN: usize = 6;
+    pub const GAIN_ONE: u32 = 65535;
 }
 
 #[cfg(unix)]
@@ -246,6 +268,7 @@ mod shared {
                 base: base as *mut u8,
             };
             shared.word(W_VOLUME).store(100, Ordering::Relaxed);
+            shared.set_gain([1.0; 3]);
             shared.word(W_MAGIC).store(MAGIC, Ordering::Release);
             Ok(shared)
         }
@@ -261,6 +284,14 @@ mod shared {
         pub fn set_volume(&self, volume: u8) {
             self.word(W_VOLUME)
                 .store(u32::from(volume.min(100)), Ordering::Release);
+        }
+
+        /// The tint PICO-8's frames and the strip get, `screen_gain`.
+        pub fn set_gain(&self, gain: [f32; 3]) {
+            for (i, g) in gain.into_iter().enumerate() {
+                let fixed = (g.clamp(0.0, 1.0) * GAIN_ONE as f32).round() as u32;
+                self.word(W_GAIN + i).store(fixed, Ordering::Release);
+            }
         }
 
         /// Puts `rgba`, premultiplied and `w` by `h`, on screen.
