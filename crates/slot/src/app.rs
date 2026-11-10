@@ -2604,7 +2604,14 @@ impl App {
             hidden.push(QuickRow::ExitGame);
         }
         if self.playing_platform() == Platform::Pico8 {
-            hidden.extend([QuickRow::Bezel, QuickRow::Overlay, QuickRow::Rewind]);
+            hidden.extend([
+                QuickRow::Bezel,
+                QuickRow::Overlay,
+                QuickRow::Rewind,
+                QuickRow::ColourCorrection,
+                QuickRow::Blending,
+                QuickRow::GameSelect,
+            ]);
         }
         if self.playing_platform().hardware() != Platform::Gba {
             hidden.extend([QuickRow::GameL, QuickRow::GameR]);
@@ -2723,6 +2730,8 @@ impl App {
             p => p,
         };
         match (row, hardware) {
+            (QuickRow::Shader, Platform::Pico8) => QuickRow::Pico8Shader,
+            (QuickRow::Scale, Platform::Pico8) => QuickRow::Pico8Scale,
             (QuickRow::Shader, Platform::Gba) => QuickRow::GbaShader,
             (QuickRow::Shader, Platform::Gb) => QuickRow::GbShader,
             (QuickRow::Shader, Platform::Gbc) => QuickRow::GbcShader,
@@ -2753,7 +2762,12 @@ impl App {
             | QuickRow::PlayBlueLight
             | QuickRow::PlaySaturation
             | QuickRow::PlayContrast
-            | QuickRow::Scale => self.quick_value(self.playing_row(row)),
+            | QuickRow::Scale => match self.playing_row(row) {
+                // A system without its own version of the row, like PICO-8 and colour
+                // correction, has no value for it.
+                same if same == row => None,
+                own => self.quick_value(own),
+            },
             QuickRow::Stretch => match self.playing_row(row) {
                 QuickRow::Stretch => None,
                 row => self.quick_value(row),
@@ -2793,6 +2807,8 @@ impl App {
             QuickRow::GbaShader => Some(shader_value(self.gba_shader())),
             QuickRow::GbShader => Some(shader_value(self.state.shader_gb)),
             QuickRow::GbcShader => Some(shader_value(self.state.shader_gbc)),
+            QuickRow::Pico8Shader => Some(shader_value(self.state.shader_pico8)),
+            QuickRow::Pico8Scale => Some(scale_value(self.resolved_scale(Platform::Pico8))),
             QuickRow::Rumble => Some(QuickValue::flag(self.state.rumble)),
             QuickRow::LeftStick => Some(QuickValue::flag(self.state.left_stick_dpad)),
             QuickRow::AutoLoad => Some(match self.state.auto_load {
@@ -2877,6 +2893,7 @@ impl App {
             | QuickRow::ScreenGba
             | QuickRow::ScreenGbc
             | QuickRow::ScreenGb
+            | QuickRow::ScreenPico8
             | QuickRow::GbBezel
             | QuickRow::GbcBezel
             | QuickRow::GbaOverlay
@@ -3137,7 +3154,9 @@ impl App {
         dim: (TexId, u32, u32),
         lit: (TexId, u32, u32),
     ) {
-        self.quick_bezel_faces[bezel_slot(platform)] = Some([dim, lit]);
+        if let Some(at) = bezel_slot(platform) {
+            self.quick_bezel_faces[at] = Some([dim, lit]);
+        }
     }
 
     pub fn bezel_files(&self, platform: Platform) -> Vec<String> {
@@ -3168,13 +3187,14 @@ impl App {
         choices
     }
 
-    fn bezel_pick(&mut self, platform: Platform) -> &mut BezelPick {
+    fn bezel_pick(&mut self, platform: Platform) -> Option<&mut BezelPick> {
         match platform {
-            Platform::Gba | Platform::Gbav => &mut self.state.bezel_gba,
+            Platform::Gba | Platform::Gbav => Some(&mut self.state.bezel_gba),
             #[cfg(feature = "nds")]
-            Platform::Nds => &mut self.state.bezel_gba,
-            Platform::Gb => &mut self.state.bezel_gb,
-            Platform::Gbc | Platform::Pico8 => &mut self.state.bezel_gbc,
+            Platform::Nds => Some(&mut self.state.bezel_gba),
+            Platform::Gb => Some(&mut self.state.bezel_gb),
+            Platform::Gbc => Some(&mut self.state.bezel_gbc),
+            Platform::Pico8 => None,
         }
     }
 
@@ -3189,7 +3209,8 @@ impl App {
             #[cfg(feature = "nds")]
             Platform::Nds => &self.state.bezel_gba,
             Platform::Gb => &self.state.bezel_gb,
-            Platform::Gbc | Platform::Pico8 => &self.state.bezel_gbc,
+            Platform::Gbc => &self.state.bezel_gbc,
+            Platform::Pico8 => return BezelPick::None,
         };
         let choices = self.bezel_choices(platform);
         if choices.contains(pick) {
@@ -3239,13 +3260,14 @@ impl App {
         entries
     }
 
-    fn overlay_pick(&mut self, platform: Platform) -> &mut Option<String> {
+    fn overlay_pick(&mut self, platform: Platform) -> Option<&mut Option<String>> {
         match platform {
-            Platform::Gba | Platform::Gbav => &mut self.state.overlay_gba,
+            Platform::Gba | Platform::Gbav => Some(&mut self.state.overlay_gba),
             #[cfg(feature = "nds")]
-            Platform::Nds => &mut self.state.overlay_nds,
-            Platform::Gb => &mut self.state.overlay_gb,
-            Platform::Gbc | Platform::Pico8 => &mut self.state.overlay_gbc,
+            Platform::Nds => Some(&mut self.state.overlay_nds),
+            Platform::Gb => Some(&mut self.state.overlay_gb),
+            Platform::Gbc => Some(&mut self.state.overlay_gbc),
+            Platform::Pico8 => None,
         }
     }
 
@@ -3258,7 +3280,8 @@ impl App {
             #[cfg(feature = "nds")]
             Platform::Nds => &self.state.overlay_nds,
             Platform::Gb => &self.state.overlay_gb,
-            Platform::Gbc | Platform::Pico8 => &self.state.overlay_gbc,
+            Platform::Gbc => &self.state.overlay_gbc,
+            Platform::Pico8 => return None,
         };
         let name = pick.as_deref()?;
         self.overlay_entries(platform)
@@ -3277,7 +3300,10 @@ impl App {
         let now = self.resolved_overlay(platform).map(|e| e.name);
         let at = choices.iter().position(|c| *c == now).unwrap_or(0);
         let n = choices.len();
-        *self.overlay_pick(platform) = choices[if right { (at + 1) % n } else { (at + n - 1) % n }].clone();
+        let to = choices[if right { (at + 1) % n } else { (at + n - 1) % n }].clone();
+        if let Some(pick) = self.overlay_pick(platform) {
+            *pick = to;
+        }
     }
 
     pub fn set_quick_overlay_faces(
@@ -3286,7 +3312,9 @@ impl App {
         dim: (TexId, u32, u32),
         lit: (TexId, u32, u32),
     ) {
-        self.quick_overlay_faces[overlay_slot(platform)] = Some([dim, lit]);
+        if let Some(at) = overlay_slot(platform) {
+            self.quick_overlay_faces[at] = Some([dim, lit]);
+        }
     }
 
     fn cycle_bezel(&mut self, platform: Platform, right: bool) {
@@ -3294,12 +3322,23 @@ impl App {
         let key = self.resolved_bezel(platform).key();
         let at = choices.iter().position(|c| c.key() == key).unwrap_or(0);
         let n = choices.len();
-        *self.bezel_pick(platform) = choices[if right {
+        let to = choices[if right {
             (at + 1) % n
         } else {
             (at + n - 1) % n
         }]
         .clone();
+        if let Some(pick) = self.bezel_pick(platform) {
+            *pick = to;
+        }
+    }
+
+    fn bezel_faces(&self, platform: Platform) -> Option<[(TexId, u32, u32); 2]> {
+        bezel_slot(platform).and_then(|at| self.quick_bezel_faces[at])
+    }
+
+    fn overlay_faces(&self, platform: Platform) -> Option<[(TexId, u32, u32); 2]> {
+        overlay_slot(platform).and_then(|at| self.quick_overlay_faces[at])
     }
 
     pub fn sp_frame(&self) -> bool {
@@ -3580,6 +3619,10 @@ impl App {
         if !self.framed_panel() {
             hidden.push(QuickRow::GbaBezel);
         }
+        // Without PICO-8 carts on the card, slot's settings stay as they are without PICO-8.
+        if !self.carts().any(|c| c.platform == Platform::Pico8) {
+            hidden.push(QuickRow::ScreenPico8);
+        }
         for (row, platform) in [
             (QuickRow::GbaOverlay, Platform::Gba),
             (QuickRow::GbOverlay, Platform::Gb),
@@ -3593,6 +3636,7 @@ impl App {
             (QuickRow::GbaScale, Platform::Gba),
             (QuickRow::GbScale, Platform::Gb),
             (QuickRow::GbcScale, Platform::Gbc),
+            (QuickRow::Pico8Scale, Platform::Pico8),
         ] {
             if self.scale_choices(platform).len() < 2 {
                 hidden.push(row);
@@ -3975,14 +4019,16 @@ impl App {
             #[cfg(feature = "nds")]
             Platform::Nds => self.state.scale_gba,
             Platform::Gb => self.state.scale_gb,
-            Platform::Gbc | Platform::Pico8 => self.state.scale_gbc,
+            Platform::Gbc => self.state.scale_gbc,
+            Platform::Pico8 => self.state.scale_pico8,
         }
     }
 
     fn stretch_of(&self, platform: Platform) -> Stretch {
         match platform {
             Platform::Gb => self.state.stretch_gb,
-            Platform::Gbc | Platform::Pico8 => self.state.stretch_gbc,
+            Platform::Gbc => self.state.stretch_gbc,
+            Platform::Pico8 => Stretch::Classic,
             Platform::Gba | Platform::Gbav => Stretch::Classic,
             #[cfg(feature = "nds")]
             Platform::Nds => Stretch::Classic,
@@ -4035,6 +4081,7 @@ impl App {
     fn scale_candidates(platform: Platform) -> &'static [Scale] {
         match platform.hardware() {
             Platform::Gba => &[Scale::Fit, Scale::Integer, Scale::FullScreen],
+            Platform::Pico8 => &Scale::PICO8,
             _ => &[Scale::SpFrame, Scale::Integer, Scale::Fit],
         }
     }
@@ -4057,7 +4104,8 @@ impl App {
     }
 
     pub fn stretch_choices(&self, platform: Platform) -> Vec<Stretch> {
-        if platform.hardware() == Platform::Gba {
+        // PICO-8's square picture is never stretched out of shape.
+        if platform.hardware() == Platform::Gba || platform == Platform::Pico8 {
             return Vec::new();
         }
         let mut seen = Vec::new();
@@ -4124,7 +4172,8 @@ impl App {
             #[cfg(feature = "nds")]
             Platform::Nds => self.state.scale_gba = to,
             Platform::Gb => self.state.scale_gb = to,
-            Platform::Gbc | Platform::Pico8 => self.state.scale_gbc = to,
+            Platform::Gbc => self.state.scale_gbc = to,
+            Platform::Pico8 => self.state.scale_pico8 = to,
         }
     }
 
@@ -4731,7 +4780,8 @@ impl App {
             #[cfg(feature = "nds")]
             Platform::Nds => Shader::Off,
             Platform::Gb => self.state.shader_gb,
-            Platform::Gbc | Platform::Pico8 => self.state.shader_gbc,
+            Platform::Gbc => self.state.shader_gbc,
+            Platform::Pico8 => self.state.shader_pico8,
         }
     }
 
@@ -4761,7 +4811,8 @@ impl App {
             #[cfg(feature = "nds")]
             Platform::Nds => false,
             Platform::Gb => self.state.colour_correction_gb,
-            Platform::Gbc | Platform::Pico8 => self.state.colour_correction_gbc,
+            Platform::Gbc => self.state.colour_correction_gbc,
+            Platform::Pico8 => false,
         }
     }
 
@@ -4771,7 +4822,8 @@ impl App {
             #[cfg(feature = "nds")]
             Platform::Nds => Blending::Off,
             Platform::Gb => self.state.blending_gb,
-            Platform::Gbc | Platform::Pico8 => self.state.blending_gbc,
+            Platform::Gbc => self.state.blending_gbc,
+            Platform::Pico8 => Blending::Off,
         }
     }
 
@@ -5470,6 +5522,7 @@ impl App {
             | QuickRow::Game
             | QuickRow::ScreenGba
             | QuickRow::ScreenGbc
+            | QuickRow::ScreenPico8
             | QuickRow::ScreenGb
             | QuickRow::Shortcuts
             | QuickRow::General
@@ -5505,6 +5558,7 @@ impl App {
             | QuickRow::GbaShader
             | QuickRow::GbShader
             | QuickRow::GbcShader
+            | QuickRow::Pico8Shader
             | QuickRow::GbPalette
             | QuickRow::Rumble
             | QuickRow::LeftStick
@@ -5540,6 +5594,7 @@ impl App {
             | QuickRow::GbaScale
             | QuickRow::GbScale
             | QuickRow::GbcScale
+            | QuickRow::Pico8Scale
             | QuickRow::GbStretch
             | QuickRow::GbcStretch
             | QuickRow::GbaBlending
@@ -5663,10 +5718,13 @@ impl App {
             self.persist();
             return;
         }
-        if let QuickRow::GbaScale | QuickRow::GbScale | QuickRow::GbcScale = row {
+        if let QuickRow::GbaScale | QuickRow::GbScale | QuickRow::GbcScale | QuickRow::Pico8Scale =
+            row
+        {
             let platform = match row {
                 QuickRow::GbaScale => Platform::Gba,
                 QuickRow::GbScale => Platform::Gb,
+                QuickRow::Pico8Scale => Platform::Pico8,
                 _ => Platform::Gbc,
             };
             self.cycle_scale(platform, right);
@@ -5791,6 +5849,13 @@ impl App {
                 }
                 s.shader_gbc = to;
             }
+            QuickRow::Pico8Shader => {
+                let to = s.shader_pico8.step(&Shader::PICO8, right);
+                if to == s.shader_pico8 {
+                    return;
+                }
+                s.shader_pico8 = to;
+            }
             QuickRow::Rumble => s.rumble = !s.rumble,
             QuickRow::LeftStick => s.left_stick_dpad = !s.left_stick_dpad,
             QuickRow::AutoLoad => s.auto_load = s.auto_load.step(right),
@@ -5847,6 +5912,7 @@ impl App {
             | QuickRow::GbPalette
             | QuickRow::ScreenGba
             | QuickRow::ScreenGbc
+            | QuickRow::ScreenPico8
             | QuickRow::ScreenGb
             | QuickRow::GbBezel
             | QuickRow::GbcBezel
@@ -5858,6 +5924,7 @@ impl App {
             | QuickRow::GbaScale
             | QuickRow::GbScale
             | QuickRow::GbcScale
+            | QuickRow::Pico8Scale
             | QuickRow::GbStretch
             | QuickRow::GbcStretch
             | QuickRow::Blending
@@ -5946,7 +6013,8 @@ impl App {
             #[cfg(feature = "nds")]
             Platform::Nds => (&mut self.state.shader_gba, gba_shaders),
             Platform::Gb => (&mut self.state.shader_gb, &Shader::GB[..]),
-            Platform::Gbc | Platform::Pico8 => (&mut self.state.shader_gbc, &Shader::GB[..]),
+            Platform::Gbc => (&mut self.state.shader_gbc, &Shader::GB[..]),
+            Platform::Pico8 => (&mut self.state.shader_pico8, &Shader::PICO8[..]),
         };
         *shader = shader.step(choices, right);
         let said = match *shader {
@@ -6001,7 +6069,12 @@ impl App {
                 #[cfg(feature = "nds")]
                 Platform::Nds => QuickRow::GbaColourCorrection,
                 Platform::Gb => QuickRow::GbColourCorrection,
-                Platform::Gbc | Platform::Pico8 => QuickRow::GbcColourCorrection,
+                Platform::Gbc => QuickRow::GbcColourCorrection,
+                // PICO-8 has no colour to correct.
+                Platform::Pico8 => {
+                    self.refuse();
+                    return true;
+                }
             };
             self.change_setting(row, true);
             let said = match self.colour_correction() {
@@ -7339,13 +7412,13 @@ impl App {
                 faces: self.quick_menu_faces.as_ref(),
                 ground: self.menu_ground(),
                 palette: self.quick_palette_faces,
-                gba_bezel: self.quick_bezel_faces[bezel_slot(Platform::Gba)],
-                gb_bezel: self.quick_bezel_faces[bezel_slot(Platform::Gb)],
-                gbc_bezel: self.quick_bezel_faces[bezel_slot(Platform::Gbc)],
+                gba_bezel: self.bezel_faces(Platform::Gba),
+                gb_bezel: self.bezel_faces(Platform::Gb),
+                gbc_bezel: self.bezel_faces(Platform::Gbc),
                 bezel: None,
-                gba_overlay: self.quick_overlay_faces[overlay_slot(Platform::Gba)],
-                gb_overlay: self.quick_overlay_faces[overlay_slot(Platform::Gb)],
-                gbc_overlay: self.quick_overlay_faces[overlay_slot(Platform::Gbc)],
+                gba_overlay: self.overlay_faces(Platform::Gba),
+                gb_overlay: self.overlay_faces(Platform::Gb),
+                gbc_overlay: self.overlay_faces(Platform::Gbc),
                 overlay: None,
                 over_game: false,
                 footer_top: self.canvas().h,
@@ -7550,11 +7623,11 @@ impl App {
                 gba_bezel: None,
                 gb_bezel: None,
                 gbc_bezel: None,
-                bezel: self.quick_bezel_faces[bezel_slot(self.playing_platform())],
+                bezel: self.bezel_faces(self.playing_platform()),
                 gba_overlay: None,
                 gb_overlay: None,
                 gbc_overlay: None,
-                overlay: self.quick_overlay_faces[overlay_slot(self.playing_platform())],
+                overlay: self.overlay_faces(self.playing_platform()),
                 over_game: true,
                 footer_top: self.canvas().h - MOUTH_H + self.menu_footer_offset(),
                 canvas: self.canvas(),
@@ -14303,23 +14376,27 @@ struct OverlayScan {
     entries: Vec<slot_store::OverlayEntry>,
 }
 
-pub fn overlay_slot(platform: Platform) -> usize {
+/// Where a system's overlay label is kept. PICO-8 has no overlays.
+pub fn overlay_slot(platform: Platform) -> Option<usize> {
     match platform {
-        Platform::Gba | Platform::Gbav => 0,
-        Platform::Gb => 1,
-        Platform::Gbc | Platform::Pico8 => 2,
+        Platform::Gba | Platform::Gbav => Some(0),
+        Platform::Gb => Some(1),
+        Platform::Gbc => Some(2),
         #[cfg(feature = "nds")]
-        Platform::Nds => 3,
+        Platform::Nds => Some(3),
+        Platform::Pico8 => None,
     }
 }
 
-fn bezel_slot(platform: Platform) -> usize {
+/// Where a system's bezel label is kept. PICO-8 has no bezels.
+fn bezel_slot(platform: Platform) -> Option<usize> {
     match platform {
-        Platform::Gba | Platform::Gbav => 0,
+        Platform::Gba | Platform::Gbav => Some(0),
         #[cfg(feature = "nds")]
-        Platform::Nds => 0,
-        Platform::Gb => 1,
-        Platform::Gbc | Platform::Pico8 => 2,
+        Platform::Nds => Some(0),
+        Platform::Gb => Some(1),
+        Platform::Gbc => Some(2),
+        Platform::Pico8 => None,
     }
 }
 

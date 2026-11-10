@@ -676,3 +676,98 @@ fn pico8_never_wears_the_game_boy_colors_bezel_or_overlay() {
     );
     assert!(a.resolved_overlay(Platform::Pico8).is_none());
 }
+
+#[test]
+fn the_in_game_menu_opens_over_a_fake08_cart_on_every_row() {
+    let d = TempDir::new().unwrap();
+    write_cart(d.path(), "celeste.p8", b"");
+    slot::root::ensure(d.path());
+    std::fs::write(d.path().join("Games/GBA/Emerald.gba"), [0u8; 512]).unwrap();
+    common::clocked(d.path());
+    let mut state = slot_store::read_slot_state(d.path());
+    state.cart = Some("celeste".into());
+    state.cart_platform = Some(Platform::Pico8);
+    state.clock_set = true;
+    slot_store::write_slot_state(d.path(), &state).unwrap();
+    let mut a = App::boot(d.path());
+    for _ in 0..600 {
+        a.on_core_ready();
+        a.update(1.0 / 60.0);
+        if matches!(a.phase(), Phase::Playing { .. }) {
+            break;
+        }
+    }
+    assert!(
+        matches!(a.phase(), Phase::Playing { cart } if cart == "celeste"),
+        "{:?}",
+        a.phase()
+    );
+    a.apply(slot_input::Action::QuickMenu);
+    for _ in 0..30 {
+        a.update(1.0 / 60.0);
+    }
+    assert_eq!(a.in_game_menu(), Some(slot_ui::QuickRow::Resume));
+    let hidden = a.in_game_hidden();
+    for row in [
+        slot_ui::QuickRow::Bezel,
+        slot_ui::QuickRow::Overlay,
+        slot_ui::QuickRow::Rewind,
+        slot_ui::QuickRow::ColourCorrection,
+        slot_ui::QuickRow::Blending,
+        slot_ui::QuickRow::Stretch,
+        slot_ui::QuickRow::GameSelect,
+    ] {
+        assert!(hidden.contains(&row), "{row:?} shows for PICO-8");
+    }
+    // Drawing a row asks for its value: PICO-8 once had no Scale or Shader of its own, and
+    // the row asked itself again until the stack ran out, freezing slot as the menu opened.
+    for row in slot_ui::QuickRow::ALL {
+        let _ = a.quick_value(row);
+    }
+    for _ in 0..30 {
+        let mut out = Vec::new();
+        a.draw(&mut out);
+        assert!(!out.is_empty());
+        a.apply(slot_input::Action::GbaDown(Btn::Down));
+        a.apply(slot_input::Action::GbaUp(Btn::Down));
+        a.update(1.0 / 60.0);
+    }
+}
+
+#[test]
+fn pico8_keeps_its_own_screen_settings_apart_from_the_game_boy_colors() {
+    let d = TempDir::new().unwrap();
+    slot::root::ensure(d.path());
+    common::clocked(d.path());
+    let mut state = slot_store::read_slot_state(d.path());
+    state.shader_gbc = slot_store::Shader::Lcd3x;
+    state.scale_gbc = slot_store::Scale::Fit;
+    state.shader_pico8 = slot_store::Shader::Shimmerless;
+    state.scale_pico8 = slot_store::Scale::Fit;
+    slot_store::write_slot_state(d.path(), &state).unwrap();
+    let back = slot_store::read_slot_state(d.path());
+    assert_eq!(back.shader_pico8, slot_store::Shader::Shimmerless);
+    assert_eq!(back.scale_pico8, slot_store::Scale::Fit);
+    assert_eq!(back.shader_gbc, slot_store::Shader::Lcd3x);
+    let a = App::boot(d.path());
+    assert_ne!(
+        a.quick_value(slot_ui::QuickRow::Pico8Shader),
+        a.quick_value(slot_ui::QuickRow::GbcShader),
+        "PICO-8's shader is its own, not the Game Boy Color's"
+    );
+    assert_eq!(
+        a.scale_choices(Platform::Pico8),
+        vec![slot_store::Scale::Integer, slot_store::Scale::Fit],
+        "PICO-8 has no SP frame to fit"
+    );
+    assert!(a.stretch_choices(Platform::Pico8).is_empty());
+    assert!(!a.colour_correction_for(Platform::Pico8));
+    assert_eq!(a.blending_for(Platform::Pico8), slot_store::Blending::Off);
+    assert_eq!(
+        slot_store::GameButton::of(Platform::Pico8)
+            .iter()
+            .any(|b| *b == slot_store::GameButton::Select),
+        false,
+        "PICO-8 has no select button"
+    );
+}

@@ -144,10 +144,13 @@ pub enum QuickRow {
     GbOverlay,
     GbcOverlay,
     Overlay,
+    ScreenPico8,
+    Pico8Shader,
+    Pico8Scale,
 }
 
 impl QuickRow {
-    pub const ALL: [QuickRow; 133 + cfg!(feature = "nds") as usize] = [
+    pub const ALL: [QuickRow; 136 + cfg!(feature = "nds") as usize] = [
         QuickRow::FastForward,
         QuickRow::FastForwardSound,
         QuickRow::Screen,
@@ -283,6 +286,9 @@ impl QuickRow {
         QuickRow::GbOverlay,
         QuickRow::GbcOverlay,
         QuickRow::Overlay,
+        QuickRow::ScreenPico8,
+        QuickRow::Pico8Shader,
+        QuickRow::Pico8Scale,
     ];
 
     pub const MAIN: [QuickRow; 6] = [
@@ -400,11 +406,12 @@ impl QuickRow {
         QuickRow::ScSunlightUp,
     ];
 
-    pub const SCREEN: [QuickRow; 4] = [
+    pub const SCREEN: [QuickRow; 5] = [
         QuickRow::ScreenGeneral,
         QuickRow::ScreenGba,
         QuickRow::ScreenGbc,
         QuickRow::ScreenGb,
+        QuickRow::ScreenPico8,
     ];
 
     pub const SCREEN_GENERAL: [QuickRow; 4] = [
@@ -443,6 +450,10 @@ impl QuickRow {
         QuickRow::GbScale,
         QuickRow::GbStretch,
     ];
+
+    /// PICO-8's own screen settings: no colour correction, frame blending, bezel or overlay,
+    /// as it has none of the Game Boy's screen to imitate.
+    pub const SCREEN_PICO8: [QuickRow; 2] = [QuickRow::Pico8Shader, QuickRow::Pico8Scale];
 
     pub const GAME: [QuickRow; 8] = [
         QuickRow::FastForward,
@@ -497,7 +508,9 @@ impl QuickRow {
             QuickRow::ScreenGeneral
             | QuickRow::ScreenGba
             | QuickRow::ScreenGbc
-            | QuickRow::ScreenGb => &QuickRow::SCREEN,
+            | QuickRow::ScreenGb
+            | QuickRow::ScreenPico8 => &QuickRow::SCREEN,
+            QuickRow::Pico8Shader | QuickRow::Pico8Scale => &QuickRow::SCREEN_PICO8,
             QuickRow::Brightness
             | QuickRow::BlueLight
             | QuickRow::Saturation
@@ -601,6 +614,7 @@ impl QuickRow {
             QuickRow::GbaShader => Some(QuickRow::ScreenGba),
             QuickRow::GbcShader => Some(QuickRow::ScreenGbc),
             QuickRow::GbShader => Some(QuickRow::ScreenGb),
+            QuickRow::Pico8Shader => Some(QuickRow::ScreenPico8),
             QuickRow::FastForward => Some(QuickRow::Game),
             QuickRow::PlayScreen => Some(QuickRow::Settings),
             QuickRow::Shader => Some(QuickRow::PlayScreen),
@@ -659,6 +673,7 @@ impl QuickRow {
             QuickRow::ScreenGba => Some(QuickRow::SCREEN_GBA[0]),
             QuickRow::ScreenGbc => Some(QuickRow::SCREEN_GBC[0]),
             QuickRow::ScreenGb => Some(QuickRow::SCREEN_GB[0]),
+            QuickRow::ScreenPico8 => Some(QuickRow::SCREEN_PICO8[0]),
             _ => None,
         }
     }
@@ -695,6 +710,7 @@ impl QuickRow {
             QuickRow::GbaShader => "Shader",
             QuickRow::GbShader => "Shader",
             QuickRow::GbcShader => "Shader",
+            QuickRow::Pico8Shader => "Shader",
             QuickRow::GbaColourCorrection => "Color Correction",
             QuickRow::GbColourCorrection => "Color Correction",
             QuickRow::GbcColourCorrection => "Color Correction",
@@ -790,11 +806,14 @@ impl QuickRow {
             QuickRow::ScreenGba => "Game Boy Advance",
             QuickRow::ScreenGbc => "Game Boy Color",
             QuickRow::ScreenGb => "Game Boy",
+            QuickRow::ScreenPico8 => "PICO-8",
             QuickRow::GbBezel => "Bezel",
             QuickRow::GbcBezel => "Bezel",
-            QuickRow::GbaScale | QuickRow::GbScale | QuickRow::GbcScale | QuickRow::Scale => {
-                "Scale"
-            }
+            QuickRow::GbaScale
+            | QuickRow::GbScale
+            | QuickRow::GbcScale
+            | QuickRow::Pico8Scale
+            | QuickRow::Scale => "Scale",
             QuickRow::GbStretch | QuickRow::GbcStretch | QuickRow::Stretch => "Stretch",
             QuickRow::GbaBlending
             | QuickRow::GbcBlending
@@ -842,6 +861,7 @@ impl QuickRow {
                 | QuickRow::ScreenGba
                 | QuickRow::ScreenGbc
                 | QuickRow::ScreenGb
+                | QuickRow::ScreenPico8
                 | QuickRow::ScreenGeneral
                 | QuickRow::Network
                 | QuickRow::Wifi

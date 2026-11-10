@@ -230,6 +230,20 @@ impl GameButton {
         GameButton::TurboB,
     ];
 
+    /// PICO-8's pad: the d-pad, O and X (the core's B and A) and its pause button. It has no
+    /// select, and no shoulders.
+    const PICO8: [GameButton; 9] = [
+        GameButton::Up,
+        GameButton::Down,
+        GameButton::Left,
+        GameButton::Right,
+        GameButton::A,
+        GameButton::B,
+        GameButton::Start,
+        GameButton::TurboA,
+        GameButton::TurboB,
+    ];
+
     const GAME_BOY: [GameButton; 10] = [
         GameButton::Up,
         GameButton::Down,
@@ -246,7 +260,8 @@ impl GameButton {
     pub fn of(platform: Platform) -> &'static [GameButton] {
         match platform {
             Platform::Gba | Platform::Gbav => &GameButton::ALL,
-            Platform::Gb | Platform::Gbc | Platform::Pico8 => &GameButton::GAME_BOY,
+            Platform::Gb | Platform::Gbc => &GameButton::GAME_BOY,
+            Platform::Pico8 => &GameButton::PICO8,
             #[cfg(feature = "nds")]
             Platform::Nds => &GameButton::ALL,
         }

@@ -328,6 +328,10 @@ pub fn bezel_for_scale(name: &str, scale: Scale) -> Option<String> {
 }
 
 impl Scale {
+    /// The sizes a PICO-8 picture comes in: whole multiples of its 128 pixels, or as tall
+    /// as the screen. There is no Game Boy Advance SP frame to match.
+    pub const PICO8: [Scale; 2] = [Scale::Integer, Scale::Fit];
+
     pub fn bezel_suffix(self) -> &'static str {
         match self {
             Scale::SpFrame => "_spscreen",
@@ -460,6 +464,10 @@ pub struct SlotState {
     pub shader_gba: Shader,
     pub shader_gb: Shader,
     pub shader_gbc: Shader,
+    /// PICO-8's own picture settings. PICO-8 is no Game Boy: it has no colour correction,
+    /// frame blending, bezels or overlays, and borrows none of the Game Boy's settings.
+    pub shader_pico8: Shader,
+    pub scale_pico8: Scale,
     pub auto_load: AutoLoad,
     pub eject_save: bool,
     pub turbo: bool,
@@ -584,6 +592,9 @@ impl Shader {
         Shader::Simpletex,
         Shader::Shimmerless,
     ];
+    /// PICO-8 draws on no LCD of its own: its pixels stay sharp, gridded, or smoothed when
+    /// they are not scaled by a whole number.
+    pub const PICO8: [Shader; 3] = [Shader::Off, Shader::Grid, Shader::Shimmerless];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -647,6 +658,8 @@ impl Default for SlotState {
             shader_gba: Shader::Grid,
             shader_gb: Shader::Simpletex,
             shader_gbc: Shader::Simpletex,
+            shader_pico8: Shader::Off,
+            scale_pico8: Scale::Integer,
             auto_load: AutoLoad::Always,
             eject_save: true,
             turbo: true,
@@ -772,6 +785,8 @@ pub fn write_slot_state(root: &Path, s: &SlotState) -> std::io::Result<()> {
         s.colour_correction_gbc as u8
     ));
     text.push_str(&format!("shader_gbc={}\n", s.shader_gbc.name()));
+    text.push_str(&format!("shader_pico8={}\n", s.shader_pico8.name()));
+    text.push_str(&format!("scale_pico8={}\n", s.scale_pico8.name()));
     text.push_str(&format!("dim={}\n", s.dim));
     text.push_str(&format!("saturation={}\n", s.saturation));
     text.push_str(&format!("contrast={}\n", s.contrast));
@@ -852,6 +867,8 @@ fn parse(text: &str) -> Option<SlotState> {
     let mut shader_gba = None;
     let mut shader_gb = None;
     let mut shader_gbc = None;
+    let mut shader_pico8 = None;
+    let mut scale_pico8 = None;
     let mut auto_load = None;
     let mut eject_save = None;
     let mut turbo = None;
@@ -959,6 +976,12 @@ fn parse(text: &str) -> Option<SlotState> {
             "gba_video" => gba_video = flag(value),
             "shader_gb" => shader_gb = Shader::parse(value).filter(|s| Shader::GB.contains(s)),
             "shader_gbc" => shader_gbc = Shader::parse(value).filter(|s| Shader::GB.contains(s)),
+            "shader_pico8" => {
+                shader_pico8 = Shader::parse(value).filter(|s| Shader::PICO8.contains(s))
+            }
+            "scale_pico8" => {
+                scale_pico8 = Scale::parse(value).filter(|s| Scale::PICO8.contains(s))
+            }
             _ => {}
         }
     }
@@ -996,6 +1019,8 @@ fn parse(text: &str) -> Option<SlotState> {
         shader_gba: shader_gba.unwrap_or(fallback.shader_gba),
         shader_gb: shader_gb.unwrap_or(fallback.shader_gb),
         shader_gbc: shader_gbc.or(shader_gb).unwrap_or(fallback.shader_gbc),
+        shader_pico8: shader_pico8.unwrap_or(fallback.shader_pico8),
+        scale_pico8: scale_pico8.unwrap_or(fallback.scale_pico8),
         auto_load: auto_load.unwrap_or(fallback.auto_load),
         eject_save: eject_save.unwrap_or(fallback.eject_save),
         turbo: turbo.unwrap_or(fallback.turbo),

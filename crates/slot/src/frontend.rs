@@ -2112,7 +2112,9 @@ fn sync_overlay(app: &mut App, compositor: &mut Compositor, state: &mut OverlayS
         #[cfg(feature = "nds")]
         Console::Nds,
     ] {
-        let at = crate::app::overlay_slot(platform);
+        let Some(at) = crate::app::overlay_slot(platform) else {
+            continue;
+        };
         let label = app.overlay_label(platform);
         if state.labels[at] == label {
             continue;
