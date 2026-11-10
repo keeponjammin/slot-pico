@@ -140,7 +140,7 @@ pub fn to_xrgb(rgba: &[u8]) -> Vec<u8> {
 }
 
 #[cfg(unix)]
-pub use screen::{blank, grab, Overlay, Saved};
+pub use screen::{blank, grab, power_off, Overlay, Saved, Still};
 
 #[cfg(unix)]
 mod screen {
@@ -260,13 +260,25 @@ mod screen {
     /// All of fb0's buffers as PICO-8 left them.
     pub struct Saved {
         bytes: Vec<u8>,
+        /// The buffer PICO-8 had on screen: its first row and fb0's stride.
+        front: Option<(usize, usize)>,
     }
 
     impl Saved {
         pub fn take() -> Option<Saved> {
+            let front = front_buffer();
             Mapped::open().map(|fb| Saved {
                 bytes: fb.bytes().to_vec(),
+                front,
             })
+        }
+
+        /// The frame PICO-8 had on screen, as fb0 held it.
+        pub fn still(&self) -> Option<Still> {
+            let (stride, y0) = self.front?;
+            let (w, h) = visible_size()?;
+            let rows = self.bytes.get(y0 * stride..(y0 + h) * stride)?.to_vec();
+            Some(Still { rows, stride, w, h })
         }
 
         /// A copy of fb0 once it has stopped changing. Stopping PICO-8 does
@@ -304,8 +316,114 @@ mod screen {
 
         /// The frame on screen, as RGBA, when fb0 is 32-bit.
         fn front(&self, w: u32, h: u32) -> Option<Vec<u8>> {
-            let (stride, y0) = front_buffer()?;
+            let (stride, y0) = self.front?;
             super::frame_rgba(&self.bytes, stride, y0, w, h)
+        }
+    }
+
+    /// One frame as fb0 holds it: the rows of a buffer, graded the way they
+    /// were drawn, ready to go back into fb0 as they are.
+    pub struct Still {
+        rows: Vec<u8>,
+        stride: usize,
+        w: usize,
+        h: usize,
+    }
+
+    impl Still {
+        /// The frame on screen now.
+        pub fn take() -> Option<Still> {
+            let (stride, y0) = front_buffer()?;
+            let (w, h) = visible_size()?;
+            let fb = Mapped::open()?;
+            let rows = fb.bytes().get(y0 * stride..(y0 + h) * stride)?.to_vec();
+            Some(Still { rows, stride, w, h })
+        }
+
+        /// Puts this frame in every buffer of fb0, so it stays on screen
+        /// whichever buffer is shown and whatever PICO-8 last drew.
+        pub fn show(&self) {
+            let Some(mut fb) = Mapped::open() else {
+                return;
+            };
+            let mem = fb.bytes_mut();
+            let len = self.rows.len();
+            let mut at = 0;
+            while at + len <= mem.len() {
+                mem[at..at + len].copy_from_slice(&self.rows);
+                at += len;
+            }
+        }
+    }
+
+    /// Leaves a game the way slot leaves one: `game` powers off over
+    /// `under`, squashing to a line and then a dot, a little bright at the
+    /// end, on slot's own curve and time. `under` is the frame slot showed
+    /// as it handed over, the cart seated in the slot; it stays on screen
+    /// after, so slot can start again on it and eject the cart.
+    pub fn power_off(game: &Still, under: &Still) {
+        let same = (game.stride, game.w, game.h) == (under.stride, under.w, under.h)
+            && game.rows.len() == under.rows.len();
+        if !same {
+            return under.show();
+        }
+        let (w, h, stride) = (under.w, under.h, under.stride);
+        let mut frame = vec![0u8; under.rows.len()];
+        let began = std::time::Instant::now();
+        loop {
+            let k = (began.elapsed().as_secs_f32() / crate::app::POWER_OFF_S).min(1.0);
+            let power = 1.0 - k;
+            if power <= 0.0 {
+                break;
+            }
+            frame.copy_from_slice(&under.rows);
+            let (sx, sy) = slot_gfx::screen_squash(w as f32, h as f32, power);
+            let rw = ((w as f32 * sx).round() as usize).clamp(1, w);
+            let rh = ((h as f32 * sy).round() as usize).clamp(1, h);
+            let (rx, ry) = ((w - rw) / 2, (h - rh) / 2);
+            let gain = slot_gfx::screen_brightness(power);
+            for y in 0..rh {
+                let src = &game.rows[(y * h / rh) * stride..];
+                let dst = (ry + y) * stride + rx * 4;
+                for x in 0..rw {
+                    let s = (x * w / rw) * 4;
+                    let d = dst + x * 4;
+                    for c in 0..3 {
+                        frame[d + c] = (f32::from(src[s + c]) * gain).min(255.0) as u8;
+                    }
+                    frame[d + 3] = src[s + 3];
+                }
+            }
+            flip_rows(&frame, h);
+        }
+        under.show();
+    }
+
+    /// fb0's visible size, xres by yres.
+    fn visible_size() -> Option<(usize, usize)> {
+        let fb = std::fs::OpenOptions::new().read(true).open(FB).ok()?;
+        let mut info = [0u32; 40];
+        let got = unsafe { libc::ioctl(fb.as_raw_fd(), FBIOGET_VSCREENINFO as _, info.as_mut_ptr()) };
+        (got == 0 && info[0] > 0 && info[1] > 0).then(|| (info[0] as usize, info[1] as usize))
+    }
+
+    /// Writes `rows`, fb0's own layout, into the buffer not on screen and
+    /// shows it; over the buffer on screen when there is only one.
+    fn flip_rows(rows: &[u8], h: usize) {
+        let Some((stride, front)) = front_buffer() else {
+            return;
+        };
+        let Some(mut fb) = Mapped::open() else {
+            return;
+        };
+        let target = back_buffer(front, h).unwrap_or(front);
+        let at = target * stride;
+        let Some(dst) = fb.bytes_mut().get_mut(at..at + rows.len()) else {
+            return;
+        };
+        dst.copy_from_slice(rows);
+        if target != front {
+            pan_to(target);
         }
     }
 
@@ -505,7 +623,7 @@ mod screen {
         /// Shows `saved` behind the menu. A turned panel's framebuffer is
         /// not the way up the menu is drawn, so it gets slot's plain ground.
         pub fn set_backdrop(&mut self, saved: &Saved) {
-            self.home = front_buffer().map(|(_, y0)| y0);
+            self.home = saved.front.map(|(_, y0)| y0);
             let (w, h) = self.panel;
             let frame = match self.turned {
                 true => None,

@@ -460,21 +460,24 @@ fn playing_a_pico8_cart_hands_the_device_over_and_comes_back_to_it() {
         "a PICO-8 cart goes into the slot like any other, not straight to PICO-8: {:?}",
         a.phase()
     );
-    let (mut seated, mut lit) = (false, false);
+    let mut seated = false;
     let mut frames = 0;
     while !a.relaunching() {
         assert!(
             !run.join(pico8::NEXT_FILE).exists(),
             "handed off before the insert had played"
         );
+        assert_eq!(
+            a.screen_power(),
+            0.0,
+            "the screen went dark before PICO-8 had it: the seated cart stays on screen instead"
+        );
         a.update(1.0 / 60.0);
         frames += 1;
         assert!(frames < 120, "never handed off: {:?}", a.phase());
         seated |= a.seat() >= 1.0;
-        lit |= a.screen_power() >= 1.0;
     }
     assert!(seated, "handed off before the cart was seated");
-    assert!(lit, "handed off before the screen had powered on");
     let played = frames as f32 / 60.0;
     assert!(
         played >= slot::app::HAND_OFF_AT - 1.0 / 60.0,
@@ -503,22 +506,12 @@ fn playing_a_pico8_cart_hands_the_device_over_and_comes_back_to_it() {
         "coming back from PICO-8 ejects the cart instead of starting it again: {:?}",
         a.phase()
     );
-    assert_eq!(a.screen_power(), 1.0, "slot comes back to PICO-8's dark screen");
-    assert!(!a.relaunching());
-    // The first steps after boot span starting up and the first, slow render.
-    a.update(1.2);
-    a.update(0.4);
-    assert!(
-        a.screen_power() > 0.5,
-        "long first steps skipped the fade out of the dark: {}",
-        a.screen_power()
+    assert_eq!(
+        (a.screen_power(), a.seat()),
+        (0.0, 1.0),
+        "slot comes back to the seated cart PICO-8 left on screen, not to the dark"
     );
-    let mut fading = 0;
-    while a.screen_power() > 0.0 {
-        a.update(1.0 / 60.0);
-        fading += 1;
-    }
-    assert!(fading >= 5, "the dark was gone in {fading} frames");
+    assert!(!a.relaunching());
     for _ in 0..120 {
         a.update(1.0 / 60.0);
         assert!(!a.relaunching(), "coming back handed the cart off again");

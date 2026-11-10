@@ -719,7 +719,7 @@ mod runner {
     use super::*;
     use crate::input::evdev::{decode, Hat, EVENT_BYTES, EV_SW, SW_LID};
     use crate::pico8_hud::{output_volume, Levels, Shared};
-    use crate::pico8_menu::{grab, Menu, Overlay, Saved, Step};
+    use crate::pico8_menu::{grab, power_off, Menu, Overlay, Saved, Step, Still};
     use slot_ui::{Hud, HudKind};
 
     const DEV: &str = "/dev/input";
@@ -803,6 +803,10 @@ mod runner {
         if let Some(s) = &shared {
             command.env(HUD_ENV, s.path());
         }
+        // slot handed over with the cart seated in the slot, and that frame is
+        // still on screen. Leaving PICO-8 powers off into it, and slot starts
+        // again on it to eject the cart, so there is no black between them.
+        let seated = Still::take();
         // The menu and the HUD draw with slot's own window, opened before
         // PICO-8 opens its own, as slot's is when it hands over.
         let overlay = match shared.is_some() {
@@ -831,6 +835,7 @@ mod runner {
             &mut state,
             shared.as_ref(),
             overlay,
+            seated,
         );
         platform.set_backlight(state.brightness + 1);
         wifi.down(root);
@@ -905,6 +910,7 @@ mod runner {
         state: &mut slot_store::SlotState,
         shared: Option<&Shared>,
         mut overlay: Option<Overlay>,
+        seated: Option<Still>,
     ) -> i32 {
         let nodes: Vec<PathBuf> = keymap.pick_devices(Path::new(DEV), Path::new(SYS));
         let files: Vec<File> = nodes.iter().filter_map(|n| File::open(n).ok()).collect();
@@ -953,7 +959,17 @@ mod runner {
                 if unsaved.is_some() {
                     save_state(root, state);
                 }
-                blank_screen();
+                match (quitting.is_some(), &seated) {
+                    // Already powered off into the seated cart: put it back
+                    // over anything PICO-8 drew on its way out.
+                    (true, Some(s)) => s.show(),
+                    // PICO-8 quit by itself: power its last frame off now.
+                    (false, Some(s)) => match Still::take() {
+                        Some(game) => power_off(&game, s),
+                        None => s.show(),
+                    },
+                    (_, None) => blank_screen(),
+                }
                 return status.code().unwrap_or(-1);
             }
             if let Some(at) = quitting {
@@ -1097,17 +1113,32 @@ mod runner {
                     }
                     Step::Quit => {
                         eprintln!("slot: pico8: back to slot");
+                        // The frame to power off: the one under the menu, or,
+                        // leaving straight from the game, the one on screen,
+                        // with PICO-8 stopped so it stays put meanwhile.
+                        let game = match saved.as_ref() {
+                            Some(s) => s.still(),
+                            None => {
+                                stop(sleep.pid);
+                                Still::take()
+                            }
+                        };
                         for f in &files {
                             grab(f, false);
                         }
-                        if let Some(o) = overlay.as_mut() {
-                            o.restore();
+                        // No putting PICO-8's buffer back on screen: it holds
+                        // an older menu frame by now, and the power off shows
+                        // its own frames and leaves the seated cart in every
+                        // buffer.
+                        match (&game, &seated) {
+                            (Some(g), Some(s)) => power_off(g, s),
+                            (None, Some(s)) => s.show(),
+                            (_, None) => blank_screen(),
                         }
                         unsafe {
                             libc::kill(sleep.pid, libc::SIGTERM);
                             libc::kill(sleep.pid, libc::SIGCONT);
                         }
-                        blank_screen();
                         quitting = Some(Instant::now());
                         break;
                     }
