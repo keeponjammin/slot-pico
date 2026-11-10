@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use image_webp::{ColorType, WebPEncoder};
 use slot_store::{Cart, Platform};
-use slot_ui::{cart_backing, cart_face_with, cart_interior, gb_shell_of, shows_interior, CartFace};
+use slot_ui::{cart_backing, cart_face_with, cart_interior, cart_shape, shows_interior, CartFace};
 
 use super::games::{modified_ms, IMMUTABLE};
 use super::{Reply, Request};
@@ -99,7 +99,7 @@ fn draw(root: &Path, cart: &Cart) -> CartFace {
         return face;
     }
     let mut out = cart_interior(&cart);
-    over(&mut out.rgba, &cart_backing(gb_shell_of(&cart)).rgba);
+    over(&mut out.rgba, &cart_backing(cart_shape(&cart)).rgba);
     over(&mut out.rgba, &face.rgba);
     out
 }

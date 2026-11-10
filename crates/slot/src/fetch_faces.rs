@@ -3,7 +3,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 
 use slot_store::{Cart, Platform};
 use slot_ui::{
-    bare_face, cart_backing, cart_face, cart_face_with, cart_interior, cover_bytes, gb_shell_of,
+    bare_face, cart_backing, cart_face, cart_face_with, cart_interior, cover_bytes, cart_shape,
     label_size, shows_interior, CartFace,
 };
 
@@ -37,7 +37,7 @@ pub fn faces_for(cart: &Cart) -> FaceSet {
         bare: bare_face(cart),
         done: cart_face(cart),
         under: shows_interior(cart)
-            .then(|| [cart_interior(cart), cart_backing(gb_shell_of(cart))]),
+            .then(|| [cart_interior(cart), cart_backing(cart_shape(cart))]),
     }
 }
 

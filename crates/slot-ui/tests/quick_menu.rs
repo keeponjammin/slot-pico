@@ -114,8 +114,9 @@ fn the_rows_run_in_the_order_the_user_chose() {
     );
     assert_eq!(
         QuickRow::SCREEN.map(QuickRow::label),
-        ["General", "Game Boy Advance", "Game Boy Color", "Game Boy"]
+        ["General", "Game Boy Advance", "Game Boy Color", "Game Boy", "PICO-8"]
     );
+    assert_eq!(QuickRow::SCREEN_PICO8.map(QuickRow::label), ["Shader", "Scale"]);
     assert_eq!(
         QuickRow::SCREEN_GENERAL.map(QuickRow::label),
         ["Brightness", "Blue Light", "Saturation", "Contrast"]
@@ -211,7 +212,8 @@ fn the_rows_run_in_the_order_the_user_chose() {
             QuickRow::RommServer,
             QuickRow::RommPort,
             QuickRow::RommPair,
-            QuickRow::RommDisconnect
+            QuickRow::RommDisconnect,
+            QuickRow::ScreenPico8
         ]
     );
     for page in [

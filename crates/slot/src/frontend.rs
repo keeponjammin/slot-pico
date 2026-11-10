@@ -727,14 +727,20 @@ impl Frontend {
             let id = compositor.create_texture(shadow.w, shadow.h, &shadow.rgba);
             self.session.app_mut().set_gb_cart_shadow(shell, id);
         }
-        let board = slot_ui::cart_backing(None);
+        let shadow = slot_ui::shape_shadow(slot_ui::CartShape::Pico8);
+        let id = compositor.create_texture(shadow.w, shadow.h, &shadow.rgba);
+        self.session.app_mut().set_pico8_cart_shadow(id);
+        let board = slot_ui::cart_backing(slot_ui::CartShape::Gba);
         let board = compositor.create_texture(board.w, board.h, &board.rgba);
         self.session.app_mut().set_cart_backing(board);
         for shell in GbShell::ALL {
-            let board = slot_ui::cart_backing(Some(shell));
+            let board = slot_ui::cart_backing(slot_ui::CartShape::Gb(shell));
             let id = compositor.create_texture(board.w, board.h, &board.rgba);
             self.session.app_mut().set_gb_cart_backing(shell, id);
         }
+        let board = slot_ui::cart_backing(slot_ui::CartShape::Pico8);
+        let id = compositor.create_texture(board.w, board.h, &board.rgba);
+        self.session.app_mut().set_pico8_cart_backing(id);
         let slot = {
             let mut upload =
                 |bytes: &[u8]| compositor.create_texture(slot_ui::SLOT_W, slot_ui::SLOT_H, bytes);
@@ -2112,7 +2118,9 @@ fn sync_overlay(app: &mut App, compositor: &mut Compositor, state: &mut OverlayS
         #[cfg(feature = "nds")]
         Console::Nds,
     ] {
-        let at = crate::app::overlay_slot(platform);
+        let Some(at) = crate::app::overlay_slot(platform) else {
+            continue;
+        };
         let label = app.overlay_label(platform);
         if state.labels[at] == label {
             continue;

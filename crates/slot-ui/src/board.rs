@@ -3,10 +3,10 @@ use slot_store::{Cart, Core};
 
 use crate::bitmaps::{self, GB_CHIP_H, GB_CHIP_W};
 use crate::cart::{
-    clean_label, gb_backing, gb_shell_of, CartFace, CART_H, CART_W, GB_CART_H, GB_CART_W,
+    cart_shape, clean_label, shaped_backing, CartFace, CartShape, CART_H, CART_W, GB_CART_H,
+    GB_CART_W,
 };
 use crate::shelf::foot_y;
-use crate::silhouette::GbShell;
 use crate::slot_chrome::ease;
 use crate::text;
 
@@ -81,8 +81,9 @@ fn marking_face(title: &[String]) -> CartFace {
 }
 
 pub fn board_face(cart: &Cart) -> CartFace {
-    if let Some(shell) = gb_shell_of(cart) {
-        return gb_backing(bitmaps::gb_board_empty(), shell);
+    match cart_shape(cart) {
+        CartShape::Gba => {}
+        shape => return shaped_backing(bitmaps::gb_board_empty(), shape),
     }
     let mut face = CartFace {
         rgba: bitmaps::board().to_vec(),
@@ -278,8 +279,8 @@ pub fn shelf_cart_at(canvas: Canvas, x: f32, scale: f32) -> Placed {
     }
 }
 
-pub fn shelf_cart_shaped(canvas: Canvas, shell: Option<GbShell>, x: f32, scale: f32) -> Placed {
-    if shell.is_none() {
+pub fn shelf_cart_shaped(canvas: Canvas, shape: CartShape, x: f32, scale: f32) -> Placed {
+    if !shape.tall() {
         return shelf_cart_at(canvas, x, scale);
     }
     let (w, h) = (GB_CART_W as f32 * scale, GB_CART_H as f32 * scale);
@@ -299,11 +300,11 @@ const GB_SLIDE_UP: f32 = 36.0;
 
 pub fn board_from_shaped(
     canvas: Canvas,
-    shell: Option<GbShell>,
+    shape: CartShape,
     shelf: Placed,
     progress: f32,
 ) -> Placed {
-    if shell.is_none() {
+    if !shape.tall() {
         return board_from(canvas, shelf, progress);
     }
     let w = GB_BOARD_REST_H * GB_CART_W as f32 / GB_CART_H as f32;
@@ -318,11 +319,11 @@ pub fn board_from_shaped(
 
 pub fn lid_from_shaped(
     canvas: Canvas,
-    shell: Option<GbShell>,
+    shape: CartShape,
     shelf: Placed,
     progress: f32,
 ) -> (Placed, f32) {
-    if shell.is_none() {
+    if !shape.tall() {
         return lid_from(canvas, shelf, progress);
     }
     let slid = Placed {
@@ -385,10 +386,10 @@ pub const GB_SEATS: Seats = Seats {
     bitmap_w: GB_CART_W as f32,
 };
 
-pub fn seats(shell: Option<GbShell>) -> Seats {
-    match shell {
-        None => GBA_SEATS,
-        Some(_) => GB_SEATS,
+pub fn seats(shape: CartShape) -> Seats {
+    match shape.tall() {
+        false => GBA_SEATS,
+        true => GB_SEATS,
     }
 }
 

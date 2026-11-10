@@ -64,6 +64,15 @@ pub fn picture_for(
         };
         return (sizing, WHOLE_TEXTURE);
     }
+    // PICO-8's square screen, whole: sharp at whole multiples or as tall as the panel, never
+    // banded like a Game Boy in the SP's frame nor stretched out of square.
+    if platform == Platform::Pico8 {
+        let sizing = match scale {
+            Scale::Integer => Sizing::Integer,
+            _ => Sizing::Fit,
+        };
+        return (sizing, crop);
+    }
     match (mode, scale, stretch) {
         (VideoMode::Actual, Scale::Integer, _) => (Sizing::Integer, crop),
         (VideoMode::Actual, Scale::Fit, _) => (Sizing::Fit, crop),

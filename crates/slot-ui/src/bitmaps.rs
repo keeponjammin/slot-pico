@@ -1,5 +1,6 @@
 use std::sync::OnceLock;
 
+use crate::pico8_cart::{PICO8_CART_H, PICO8_CART_W};
 use slot_gfx::OUT_W;
 
 use crate::art::decode_png_bytes;
@@ -146,10 +147,10 @@ pub fn gbc_cart() -> &'static [u8] {
 }
 
 /// The PICO-8 cart's outline, from `assets/pico8_cart.png` (drawn by
-/// `tools/pico8_cart.py`): a pak's size, pixel-stepped corners.
+/// `tools/pico8_cart.py`): pixel-stepped corners.
 pub fn pico8_cart() -> &'static [u8] {
     static P: OnceLock<Vec<u8>> = OnceLock::new();
-    load(PICO8_CART_PNG, GB_CART_W, GB_CART_H, &P)
+    load(PICO8_CART_PNG, PICO8_CART_W, PICO8_CART_H, &P)
 }
 
 /// The inside of a GBA cart, from `assets/gba_interior.png`. Same size as the cart and
@@ -175,7 +176,7 @@ pub fn gbc_interior() -> &'static [u8] {
 /// The back of a PICO-8 cart, from `assets/pico8_interior.png`.
 pub fn pico8_interior() -> &'static [u8] {
     static P: OnceLock<Vec<u8>> = OnceLock::new();
-    load(PICO8_INTERIOR_PNG, GB_CART_W, GB_CART_H, &P)
+    load(PICO8_INTERIOR_PNG, PICO8_CART_W, PICO8_CART_H, &P)
 }
 
 /// The Game Boy PCB, from `assets/gb_board.png`, drawn between the pak's back and front plastic.
@@ -414,8 +415,8 @@ pub fn shell_asset(mould: Mould, clear: bool) -> &'static [u8] {
         (Mould::Gba, true) => (GBA_CLEAR_PNG, GBA_CART_W, GBA_CART_H, &GBA_CLEAR),
         (Mould::Notched, true) => (GB_CLEAR_PNG, GB_CART_W, GB_CART_H, &GB_CLEAR),
         (Mould::Rounded, true) => (GBC_CLEAR_PNG, GB_CART_W, GB_CART_H, &GBC_CLEAR),
-        // One raster for both: like the Game Boy Color's, its clear shell is the same plastic.
-        (Mould::Pico8, _) => (PICO8_SHELL_PNG, GB_CART_W, GB_CART_H, &PICO8),
+        // One raster for both: its clear shell is the same plastic.
+        (Mould::Pico8, _) => (PICO8_SHELL_PNG, PICO8_CART_W, PICO8_CART_H, &PICO8),
         #[cfg(feature = "nds")]
         (Mould::Ds, _) => return ds_cart(),
     };

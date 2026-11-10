@@ -92,16 +92,21 @@ pub fn layout(canvas_w: f32, platform: Platform) -> Layout {
                 / slot_ui::CART_W as f32,
             slot_ui::DS_CART_H as f32 / slot_ui::DS_CART_W as f32,
         ),
-        Platform::Gb | Platform::Gbc | Platform::Pico8 => (
+        Platform::Gb | Platform::Gbc => (
             if narrow { 248.0 } else { GB_CART_W as f32 },
             GB_CART_H as f32 / GB_CART_W as f32,
+        ),
+        Platform::Pico8 => (
+            if narrow { 248.0 } else { slot_ui::PICO8_CART_W as f32 },
+            slot_ui::PICO8_CART_H as f32 / slot_ui::PICO8_CART_W as f32,
         ),
     };
     let inset = match platform {
         Platform::Gba | Platform::Gbav => 0.0,
         #[cfg(feature = "nds")]
         Platform::Nds => 0.0,
-        Platform::Gb | Platform::Gbc | Platform::Pico8 => w * GB_ART_INSET / GB_CART_W as f32,
+        Platform::Gb | Platform::Gbc => w * GB_ART_INSET / GB_CART_W as f32,
+        Platform::Pico8 => w * PICO8_ART_INSET / slot_ui::PICO8_CART_W as f32,
     };
     let h = w * ratio;
     let (sin, cos) = CART_TILT.to_radians().abs().sin_cos();
@@ -111,7 +116,7 @@ pub fn layout(canvas_w: f32, platform: Platform) -> Layout {
         #[cfg(feature = "nds")]
         Platform::Nds => slot_ui::DS_LABEL_W as f32 / slot_ui::DS_CART_W as f32,
         Platform::Gb | Platform::Gbc => slot_ui::GB_LABEL_W as f32 / GB_CART_W as f32,
-        Platform::Pico8 => slot_ui::PICO8_LABEL_W as f32 / GB_CART_W as f32,
+        Platform::Pico8 => slot_ui::PICO8_LABEL_W as f32 / slot_ui::PICO8_CART_W as f32,
     };
     let printer = w * sticker + 2.0 * (SLIP_PAD + PRINTER_LIP);
     let margin = ((canvas_w - wide - printer) / 3.0).floor().max(EDGE);
@@ -431,6 +436,8 @@ const CHIP_EDGE: f32 = 26.0;
 const SCROLL_W: f32 = 4.0;
 pub const CART_TILT: f32 = -7.0;
 const GB_ART_INSET: f32 = 10.0;
+/// How far the PICO-8 cart's art stands in from its sides, at its own width.
+const PICO8_ART_INSET: f32 = 10.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tray {
@@ -482,21 +489,21 @@ pub fn well_of(cart: &slot_store::Cart) -> [u32; 4] {
     if cart.platform == Platform::Nds {
         return [slot_ui::DS_LABEL_X, slot_ui::DS_LABEL_Y, slot_ui::DS_LABEL_W, slot_ui::DS_LABEL_H];
     }
-    match slot_ui::gb_shell_of(cart) {
-        None => [slot_ui::LABEL_X, slot_ui::LABEL_Y, slot_ui::LABEL_W, slot_ui::LABEL_H],
-        Some(slot_ui::GbShell::Notched) => [
+    match slot_ui::cart_shape(cart) {
+        slot_ui::CartShape::Gba => [slot_ui::LABEL_X, slot_ui::LABEL_Y, slot_ui::LABEL_W, slot_ui::LABEL_H],
+        slot_ui::CartShape::Gb(slot_ui::GbShell::Notched) => [
             slot_ui::GB_LABEL_X,
             slot_ui::GB_LABEL_Y,
             slot_ui::GB_LABEL_W,
             slot_ui::GB_LABEL_H,
         ],
-        Some(slot_ui::GbShell::Rounded) => [
+        slot_ui::CartShape::Gb(slot_ui::GbShell::Rounded) => [
             slot_ui::GBC_LABEL_X,
             slot_ui::GBC_LABEL_Y,
             slot_ui::GBC_LABEL_W,
             slot_ui::GBC_LABEL_H,
         ],
-        Some(slot_ui::GbShell::Pico8) => [
+        slot_ui::CartShape::Pico8 => [
             slot_ui::PICO8_LABEL_X,
             slot_ui::PICO8_LABEL_Y,
             slot_ui::PICO8_LABEL_W,
@@ -510,7 +517,8 @@ pub fn shelf_rect(canvas: slot_gfx::Canvas, cart: &slot_store::Cart) -> [f32; 4]
         Platform::Gba | Platform::Gbav => (slot_ui::CART_W as f32, slot_ui::CART_H as f32),
         #[cfg(feature = "nds")]
         Platform::Nds => (slot_ui::DS_CART_W as f32, slot_ui::DS_CART_H as f32),
-        Platform::Gb | Platform::Gbc | Platform::Pico8 => (GB_CART_W as f32, GB_CART_H as f32),
+        Platform::Gb | Platform::Gbc => (GB_CART_W as f32, GB_CART_H as f32),
+        Platform::Pico8 => (slot_ui::PICO8_CART_W as f32, slot_ui::PICO8_CART_H as f32),
     };
     [(canvas.w - w) / 2.0, slot_ui::rest_y(canvas, h), w, h]
 }
