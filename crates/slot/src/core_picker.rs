@@ -52,6 +52,9 @@ pub struct CorePicker {
     hop: Option<Hop>,
     close: Option<Close>,
     refusal: Option<Refusal>,
+    /// A core on the board that cannot be seated, as the owner's PICO-8 when
+    /// it is not on the card: moving to it shakes the chip, as at the end.
+    barred: Option<Core>,
 }
 
 impl CorePicker {
@@ -64,7 +67,12 @@ impl CorePicker {
             hop: None,
             close: None,
             refusal: None,
+            barred: None,
         }
+    }
+
+    pub fn bar(&mut self, core: Core) {
+        self.barred = Some(core);
     }
 
     pub fn start(&mut self, now: Millis) {
@@ -123,6 +131,10 @@ impl CorePicker {
         };
         if self.waiting() {
             return Outcome::Nothing;
+        }
+        if self.barred == Some(target) && target != self.seat {
+            self.refusal = Some(Refusal::started(now));
+            return Outcome::Refused;
         }
         if let Some(progress) = self.hop_progress(now) {
             if target == self.seat {

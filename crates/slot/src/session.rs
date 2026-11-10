@@ -590,6 +590,7 @@ impl Session {
             return;
         };
         let core = slot_store::core_for_platform(&self.root, stem, platform, self.app.gb_core());
+        let core = crate::pico8::usable(&self.root, core);
         launch(&format!("opening {stem} on {}", core.as_str()));
         self.app.set_core(core);
         self.app.set_platform(platform);
