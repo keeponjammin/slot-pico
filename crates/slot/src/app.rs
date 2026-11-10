@@ -70,16 +70,12 @@ const DS_CLICK_GAP_S: f32 = 0.53;
 
 pub const POWER_ON_S: f32 = 0.22;
 
-const POWER_OFF_S: f32 = 0.16;
+pub(crate) const POWER_OFF_S: f32 = 0.16;
 
-/// How long a PICO-8 cart's screen stays dark after powering on before slot
-/// hands the device over, so the hand-off never lands mid-fade.
-const HAND_OFF_HOLD_S: f32 = 0.12;
-/// The longest step the fade out of the dark takes after slot comes back: one frame.
-const RETURN_FADE_STEP_S: f32 = 1.0 / 60.0;
-/// When slot hands PICO-8 the device: the cart seated, the screen powered on
-/// into PICO-8's black, and a breath of dark after.
-pub const HAND_OFF_AT: f32 = INSERT_S + POWER_ON_S + HAND_OFF_HOLD_S;
+/// When slot hands PICO-8 the device: the cart seated in the slot and held
+/// there, as any cart is before its screen comes on. That frame stays on
+/// screen while PICO-8 starts, instead of going dark.
+pub const HAND_OFF_AT: f32 = INSERT_S;
 
 const FOOTER_SLIDE_S: f32 = POWER_ON_S;
 const GIFT_REACH: i32 = 4;
@@ -626,10 +622,6 @@ pub struct App {
     link_transport: Option<(u16, Box<dyn LinkChannel>)>,
     restarting: bool,
     relaunching: bool,
-    /// slot has just come back from a program it handed a cart to. Until the screen is out of
-    /// the dark, each step of the fade is at most a frame long: the first steps after boot
-    /// span starting up and the first, slow render, and would skip the fade outright.
-    dark_return: bool,
     repairing: bool,
     repair_prompt: bool,
     reset_prompt: Option<QuickRow>,
@@ -1127,7 +1119,6 @@ impl App {
             link_transport: None,
             restarting: false,
             relaunching: false,
-            dark_return: false,
             repairing: false,
             repair_prompt: false,
             reset_prompt: None,
@@ -1340,14 +1331,13 @@ impl App {
         }
     }
 
-    /// slot starts again after a program it handed a cart to quits: the screen is still dark
-    /// from it, so it fades back out and the cart comes out of the slot onto the shelf.
+    /// slot starts again after a program it handed a cart to quits. That program left the
+    /// screen as slot handed it over, the cart seated in the slot, so slot picks up from
+    /// there and ejects the cart onto the shelf.
     fn eject_on_return(&mut self, i: usize) {
         let cart = self.shelf().carts[i].clone();
         eprintln!("slot: {} came back from {}, ejecting", cart.stem, cart.platform.name());
         self.seated_platform = Some(cart.platform);
-        self.screen = 1.0;
-        self.dark_return = true;
         self.phase = Phase::Ejecting {
             cart: cart.stem,
             t: -EJECT_HOLD_S,
@@ -6329,14 +6319,10 @@ impl App {
         }
         self.step_screen(dt);
         self.step_footer(dt);
-        self.hand_off_when_lit();
+        self.hand_off_when_seated();
     }
 
     fn step_screen(&mut self, dt: f32) {
-        let dt = match self.dark_return {
-            true => dt.min(RETURN_FADE_STEP_S),
-            false => dt,
-        };
         self.blank_s = match self.blank_panel() {
             Some(_) => self.blank_s + dt,
             None => 0.0,
@@ -6349,7 +6335,6 @@ impl App {
             -dt / POWER_OFF_S
         };
         self.screen = (self.screen + step).clamp(0.0, 1.0);
-        self.dark_return &= self.screen > 0.0;
         let docked = matches!(
             self.phase,
             Phase::Shelf | Phase::Inserting { .. } | Phase::Ejecting { .. }
@@ -6528,7 +6513,6 @@ impl App {
         }
         let lit = match self.playing_platform() {
             Platform::Gb => [0x9b, 0xa5, 0x82],
-            Platform::Pico8 => [0, 0, 0],
             _ => [0xe6, 0xe4, 0xda],
         };
         let k = (self.blank_s / BLANK_WARM_S).min(1.0);
@@ -7583,26 +7567,7 @@ impl App {
         if let Some(menu) = self.game_menu {
             self.draw_game_menu(menu, out);
         }
-        self.draw_outside_dark(out);
         self.hud.draw(self.canvas(), self.now(), out);
-    }
-
-    /// A cart that runs outside slot powers its screen on into the dark the program starts in,
-    /// so the whole screen goes black as slot hands over, and comes back out of it when slot
-    /// returns and ejects the cart.
-    fn draw_outside_dark(&self, out: &mut Vec<Draw>) {
-        let outside = matches!(self.phase, Phase::Inserting { .. } | Phase::Ejecting { .. })
-            && self.seated_cart().is_some_and(|c| c.platform.runs_outside());
-        if !outside || self.screen <= 0.0 {
-            return;
-        }
-        out.push(Draw::Rect {
-            x: 0.0,
-            y: 0.0,
-            w: self.canvas().w,
-            h: self.canvas().h,
-            colour: [0.0, 0.0, 0.0, ease(self.screen)],
-        });
     }
 
     pub fn screen_shake(&self) -> f32 {
@@ -9389,8 +9354,8 @@ impl App {
     }
 
     /// A cart that runs outside slot plays the insert like any other: once it is seated and
-    /// the screen has powered on into the dark, slot hands the device over.
-    fn hand_off_when_lit(&mut self) {
+    /// held, slot hands the device over, leaving that frame on screen while the program starts.
+    fn hand_off_when_seated(&mut self) {
         if self.relaunching {
             return;
         }
