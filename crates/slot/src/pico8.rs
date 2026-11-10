@@ -946,6 +946,9 @@ mod runner {
                     for f in &files {
                         grab(f, false);
                     }
+                    if let Some(o) = overlay.as_mut() {
+                        o.restore();
+                    }
                 }
                 if unsaved.is_some() {
                     save_state(root, state);
@@ -1063,8 +1066,9 @@ mod runner {
                         o.set_grade(state.blue_light, state.dim);
                         o.set_backdrop(s);
                         o.seat(root, state);
+                        o.set_status(platform.battery(), &clock_text(state));
                         if let Some(row) = menu.row() {
-                            o.draw(row, &hidden);
+                            o.show(row, &hidden);
                         }
                     }
                     Step::Moved => {
@@ -1074,11 +1078,15 @@ mod runner {
                     }
                     Step::Resume => {
                         eprintln!("slot: pico8: menu: resume");
-                        if let Some(o) = &overlay {
+                        if let Some(o) = overlay.as_mut() {
+                            o.hide();
                             o.settle();
                         }
                         if let Some(s) = saved.take() {
                             s.put_back();
+                        }
+                        if let Some(o) = overlay.as_mut() {
+                            o.restore();
                         }
                         for f in &files {
                             grab(f, false);
@@ -1091,6 +1099,9 @@ mod runner {
                         eprintln!("slot: pico8: back to slot");
                         for f in &files {
                             grab(f, false);
+                        }
+                        if let Some(o) = overlay.as_mut() {
+                            o.restore();
                         }
                         unsafe {
                             libc::kill(sleep.pid, libc::SIGTERM);
@@ -1106,6 +1117,14 @@ mod runner {
                 update_hud(&mut hud, &mut hud_drawn, &mut overlay, s, now);
             }
         }
+    }
+
+    /// The time for the menu's corner, in the zone and format slot shows it.
+    fn clock_text(state: &slot_store::SlotState) -> String {
+        let utc = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        slot_ui::time_text(state.zone.local(utc), state.clock_24h)
     }
 
     const HUD_FILE: &str = "/dev/shm/slot-pico8-hud";
