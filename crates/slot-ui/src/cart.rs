@@ -4,6 +4,10 @@ use slot_store::{Cart, Outline, Platform};
 use crate::art;
 use crate::bitmaps::{self, Mould};
 use crate::board::{BOARD_H, BOARD_W};
+use crate::pico8_cart::{
+    pico8_cart_mask, PICO8_CART_H, PICO8_CART_W, PICO8_LABEL_H, PICO8_LABEL_W, PICO8_LABEL_X,
+    PICO8_LABEL_Y,
+};
 use crate::shell::{shell_for, Finish, Shell};
 use crate::silhouette::{cart_mask, gb_cart_mask, GbShell};
 use crate::text;
@@ -46,14 +50,6 @@ pub const GBC_LABEL_Y: u32 = 110;
 pub const GBC_LABEL_W: u32 = 223;
 pub const GBC_LABEL_H: u32 = 199;
 
-/// The PICO-8 cart's label box: the square well drawn in `assets/pico8_neutral.png`, x 50..262,
-/// y 78..290 of 312x337. Square, as every PICO-8 label is. Keep in step with `LABEL` in
-/// `tools/pico8_cart.py`.
-pub const PICO8_LABEL_X: u32 = 50;
-pub const PICO8_LABEL_Y: u32 = 78;
-pub const PICO8_LABEL_W: u32 = 212;
-pub const PICO8_LABEL_H: u32 = 212;
-
 const PAD: u32 = 10;
 const MAX_LINES: usize = 3;
 const MIN_PX: f32 = 10.0;
@@ -73,9 +69,41 @@ struct Spec {
     paint: &'static [u8],
 }
 
+/// The shape a cart sits in on the shelf, which decides its board, seats and shadow. A DS card
+/// stands in a Game Boy Advance cart's place on the shelf.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum CartShape {
+    Gba,
+    Gb(GbShell),
+    Pico8,
+}
+
+impl CartShape {
+    pub const ALL: [CartShape; 4] = [
+        CartShape::Gba,
+        CartShape::Gb(GbShell::Notched),
+        CartShape::Gb(GbShell::Rounded),
+        CartShape::Pico8,
+    ];
+
+    /// A cart that stands as tall as a pak, with the pak's board and seats.
+    pub fn tall(self) -> bool {
+        self != CartShape::Gba
+    }
+
+    fn shape(self) -> Shape {
+        match self {
+            CartShape::Gba => Shape::Gba,
+            CartShape::Gb(shell) => Shape::Gb(shell),
+            CartShape::Pico8 => Shape::Pico8,
+        }
+    }
+}
+
 enum Shape {
     Gba,
     Gb(GbShell),
+    Pico8,
     #[cfg(feature = "nds")]
     Ds,
 }
@@ -93,8 +121,7 @@ const DS_LABEL: (u32, u32, u32, u32) = (DS_LABEL_X, DS_LABEL_Y, DS_LABEL_W, DS_L
 
 pub fn folder_gb_shell(cart: &Cart) -> Option<GbShell> {
     match cart.platform {
-        Platform::Gba | Platform::Gbav => None,
-        Platform::Pico8 => Some(GbShell::Pico8),
+        Platform::Gba | Platform::Gbav | Platform::Pico8 => None,
         #[cfg(feature = "nds")]
         Platform::Nds => None,
         Platform::Gb | Platform::Gbc => Some(match cart.shell.map(|c| c.outline) {
@@ -111,7 +138,7 @@ pub fn folder_is_clear(cart: &Cart) -> bool {
         .is_some_and(|c| c.finish != slot_store::ShellFinish::Solid)
 }
 
-pub fn shelf_shape(cart: &Cart) -> (Option<GbShell>, bool) {
+pub fn shelf_shape(cart: &Cart) -> (CartShape, bool) {
     let clear = |shell: Option<Shell>| match shell {
         Some(s) => s.finish != Finish::Solid,
         None => folder_is_clear(cart),
@@ -119,25 +146,33 @@ pub fn shelf_shape(cart: &Cart) -> (Option<GbShell>, bool) {
     let shell = crate::shell::indexed_shell(cart);
     let outline = cart.shell.map(|c| c.outline);
     let shape = match (cart.platform, outline) {
-        (Platform::Gba | Platform::Gbav, _) => None,
+        (Platform::Gba | Platform::Gbav, _) => CartShape::Gba,
         #[cfg(feature = "nds")]
-        (Platform::Nds, _) => None,
-        (Platform::Pico8, _) => Some(GbShell::Pico8),
-        (_, Some(Outline::Notched)) => Some(GbShell::Notched),
-        (_, Some(Outline::Rounded)) => Some(GbShell::Rounded),
+        (Platform::Nds, _) => CartShape::Gba,
+        (Platform::Pico8, _) => CartShape::Pico8,
+        (_, Some(Outline::Notched)) => CartShape::Gb(GbShell::Notched),
+        (_, Some(Outline::Rounded)) => CartShape::Gb(GbShell::Rounded),
         _ => match slot_store::header_index::peek_gb_header(&cart.rom).flatten() {
-            Some(h) if h.class() == Class::ColourOnly => Some(GbShell::Rounded),
-            Some(_) => Some(GbShell::Notched),
-            None => folder_gb_shell(cart),
+            Some(h) if h.class() == Class::ColourOnly => CartShape::Gb(GbShell::Rounded),
+            Some(_) => CartShape::Gb(GbShell::Notched),
+            None => folder_gb_shell(cart).map_or(CartShape::Gba, CartShape::Gb),
         },
     };
     (shape, clear(shell))
 }
 
+/// A cart's shape, read from its header where the shelf's index has not got it yet.
+pub fn cart_shape(cart: &Cart) -> CartShape {
+    match cart.platform {
+        Platform::Pico8 => CartShape::Pico8,
+        _ => gb_shell_of(cart).map_or(CartShape::Gba, CartShape::Gb),
+    }
+}
+
+/// The Game Boy pak a cart is, if it is one.
 pub fn gb_shell_of(cart: &Cart) -> Option<GbShell> {
     match cart.platform {
-        Platform::Gba | Platform::Gbav => None,
-        Platform::Pico8 => Some(GbShell::Pico8),
+        Platform::Gba | Platform::Gbav | Platform::Pico8 => None,
         #[cfg(feature = "nds")]
         Platform::Nds => None,
         Platform::Gb | Platform::Gbc => Some(match cart.shell.map(|c| c.outline) {
@@ -151,11 +186,8 @@ pub fn gb_shell_of(cart: &Cart) -> Option<GbShell> {
     }
 }
 
-pub fn label_rect(shell: Option<GbShell>) -> (f32, f32, f32, f32) {
-    let s = spec(match shell {
-        None => Shape::Gba,
-        Some(shell) => Shape::Gb(shell),
-    });
+pub fn label_rect(shape: CartShape) -> (f32, f32, f32, f32) {
+    let s = spec(shape.shape());
     let (x, y, w, h) = s.label;
     (
         x as f32 / s.w as f32,
@@ -170,10 +202,7 @@ fn shape_of(cart: &Cart) -> Shape {
     if cart.platform == Platform::Nds {
         return Shape::Ds;
     }
-    match gb_shell_of(cart) {
-        None => Shape::Gba,
-        Some(shell) => Shape::Gb(shell),
-    }
+    cart_shape(cart).shape()
 }
 
 fn spec(shape: Shape) -> Spec {
@@ -192,19 +221,24 @@ fn spec(shape: Shape) -> Spec {
             label: match shell {
                 GbShell::Notched => (GB_LABEL_X, GB_LABEL_Y, GB_LABEL_W, GB_LABEL_H),
                 GbShell::Rounded => (GBC_LABEL_X, GBC_LABEL_Y, GBC_LABEL_W, GBC_LABEL_H),
-                GbShell::Pico8 => (PICO8_LABEL_X, PICO8_LABEL_Y, PICO8_LABEL_W, PICO8_LABEL_H),
             },
             mask: gb_cart_mask(shell),
             mould: match shell {
                 GbShell::Notched => Mould::Notched,
                 GbShell::Rounded => Mould::Rounded,
-                GbShell::Pico8 => Mould::Pico8,
             },
             paint: match shell {
                 GbShell::Notched => bitmaps::gb_cart(),
                 GbShell::Rounded => bitmaps::gbc_cart(),
-                GbShell::Pico8 => bitmaps::pico8_cart(),
             },
+        },
+        Shape::Pico8 => Spec {
+            w: PICO8_CART_W,
+            h: PICO8_CART_H,
+            label: (PICO8_LABEL_X, PICO8_LABEL_Y, PICO8_LABEL_W, PICO8_LABEL_H),
+            mask: pico8_cart_mask(),
+            mould: Mould::Pico8,
+            paint: bitmaps::pico8_cart(),
         },
         #[cfg(feature = "nds")]
         Shape::Ds => Spec {
@@ -227,9 +261,13 @@ pub fn seated_box(platform: Platform) -> (u32, u32) {
         Platform::Gba | Platform::Gbav => (SEATED_W, SEATED_H),
         #[cfg(feature = "nds")]
         Platform::Nds => ((SEATED_H * bitmaps::DS_CART_W + bitmaps::DS_CART_H / 2) / bitmaps::DS_CART_H, SEATED_H),
-        Platform::Gb | Platform::Gbc | Platform::Pico8 => (SEATED_W, GB_SEATED_H),
+        Platform::Gb | Platform::Gbc => (SEATED_W, GB_SEATED_H),
+        Platform::Pico8 => (SEATED_W, PICO8_SEATED_H),
     }
 }
+
+/// How tall a PICO-8 cart stands seated, at the slot's width.
+const PICO8_SEATED_H: u32 = (SEATED_W * PICO8_CART_H + PICO8_CART_W / 2) / PICO8_CART_W;
 
 pub fn cart_box(platform: Platform) -> (u32, u32) {
     let s = spec(match platform {
@@ -237,7 +275,7 @@ pub fn cart_box(platform: Platform) -> (u32, u32) {
         #[cfg(feature = "nds")]
         Platform::Nds => Shape::Ds,
         Platform::Gb | Platform::Gbc => Shape::Gb(GbShell::Notched),
-        Platform::Pico8 => Shape::Gb(GbShell::Pico8),
+        Platform::Pico8 => Shape::Pico8,
     });
     (s.w, s.h)
 }
@@ -248,6 +286,12 @@ pub fn cart_shadow() -> CartFace {
 
 pub fn gb_cart_shadow(shell: GbShell) -> CartFace {
     shadow(GB_CART_W, GB_CART_H, gb_cart_mask(shell))
+}
+
+/// The shadow a cart of `shape` casts as it recedes on the shelf.
+pub fn shape_shadow(shape: CartShape) -> CartFace {
+    let s = spec(shape.shape());
+    shadow(s.w, s.h, s.mask)
 }
 
 fn shadow(w: u32, h: u32, mask: &[u8]) -> CartFace {
@@ -278,16 +322,19 @@ pub fn shows_interior(cart: &Cart) -> bool {
 /// Boy Color pak `gbc_interior.png`. Same size as that cart's board and face.
 pub fn cart_interior(cart: &Cart) -> CartFace {
     let colour = shell_for(cart).colour;
-    let (src, w, h, mask) = match gb_shell_of(cart) {
-        None => (bitmaps::gba_interior(), BOARD_W, BOARD_H, None),
-        Some(shell) => {
+    let (src, w, h, mask) = match cart_shape(cart) {
+        CartShape::Gba => (bitmaps::gba_interior(), BOARD_W, BOARD_H, None),
+        CartShape::Gb(shell) => {
             let s = spec(Shape::Gb(shell));
             let src = match shell {
                 GbShell::Notched => bitmaps::gb_interior(),
                 GbShell::Rounded => bitmaps::gbc_interior(),
-                GbShell::Pico8 => bitmaps::pico8_interior(),
             };
             (src, s.w, s.h, Some(s.mask))
+        }
+        CartShape::Pico8 => {
+            let s = spec(Shape::Pico8);
+            (bitmaps::pico8_interior(), s.w, s.h, Some(s.mask))
         }
     };
     let mut rgba = src.to_vec();
@@ -307,20 +354,27 @@ pub fn cart_interior(cart: &Cart) -> CartFace {
 }
 
 /// The board a clear cart's plastic is drawn over, between the back and front shells. A GBA cart
-/// gets `board.png`. A pak gets `gb_board.png`, cut to the notched or rounded outline.
-pub fn cart_backing(shell: Option<GbShell>) -> CartFace {
-    let Some(shell) = shell else {
-        return CartFace {
+/// gets `board.png`. A pak gets `gb_board.png`, cut to the notched or rounded outline. A
+/// PICO-8 cart has no board drawn for it yet, so it shows the pak's, cut to its own outline.
+pub fn cart_backing(shape: CartShape) -> CartFace {
+    match shape {
+        CartShape::Gba => CartFace {
             rgba: bitmaps::board().to_vec(),
             w: BOARD_W,
             h: BOARD_H,
-        };
-    };
-    gb_backing(bitmaps::gb_board(), shell)
+        },
+        CartShape::Gb(shell) => gb_backing(bitmaps::gb_board(), shell),
+        CartShape::Pico8 => shaped_backing(bitmaps::gb_board(), CartShape::Pico8),
+    }
 }
 
 pub fn gb_backing(board: &[u8], shell: GbShell) -> CartFace {
-    let s = spec(Shape::Gb(shell));
+    shaped_backing(board, CartShape::Gb(shell))
+}
+
+/// `board`, at a tall cart's size, cut to that cart's outline.
+pub fn shaped_backing(board: &[u8], shape: CartShape) -> CartFace {
+    let s = spec(shape.shape());
     let mut rgba = board.to_vec();
     for (px, cover) in rgba.chunks_exact_mut(4).zip(s.mask) {
         px[3] = ((px[3] as u32 * *cover as u32 + 127) / 255) as u8;
@@ -479,7 +533,7 @@ pub fn neutral_shell(mould: Mould, clear: bool) -> Vec<u8> {
         Mould::Gba => Shape::Gba,
         Mould::Notched => Shape::Gb(GbShell::Notched),
         Mould::Rounded => Shape::Gb(GbShell::Rounded),
-        Mould::Pico8 => Shape::Gb(GbShell::Pico8),
+        Mould::Pico8 => Shape::Pico8,
         #[cfg(feature = "nds")]
         Mould::Ds => Shape::Ds,
     };

@@ -8,7 +8,7 @@ Put your carts in `Games/PICO8/`. Both `.p8` and `.p8.png` carts work. Next time
 
 ## Playing
 
-Press <kbd>A</kbd> on a cart to play it. It goes into the slot and plays like any other game, with slot's in-game menu, save states, screenshots and the quick menu. Rewind, bezels and overlays are not there for PICO-8.
+Press <kbd>A</kbd> on a cart to play it. It goes into the slot and plays like any other game, with slot's in-game menu, save states, screenshots and the quick menu. Rewind, bezels and overlays are not there for PICO-8. Its own Shader and Scale are under Settings → Screen → PICO-8, apart from the Game Boy's.
 
 | Button | In PICO-8 |
 |---|---|

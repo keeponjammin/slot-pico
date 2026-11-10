@@ -2,7 +2,9 @@ use slot_gfx::{Canvas, Draw, TexId, OUT_H, OUT_W};
 use slot_store::{Cart, Platform};
 
 use crate::board::{board_in, Placed};
-use crate::cart::{cart_box, label_colour, label_rect, label_text, shelf_shape, CART_H, CART_W};
+use crate::cart::{
+    cart_box, label_colour, label_rect, label_text, shelf_shape, CartShape, CART_H, CART_W,
+};
 use crate::hud::Millis;
 use crate::silhouette::GbShell;
 use crate::slot_chrome::{draw_empty_slot, MOUTH_H};
@@ -41,7 +43,8 @@ pub fn box_size(platform: Platform) -> (u32, u32) {
         Platform::Gba | Platform::Gbav => (318, 282),
         #[cfg(feature = "nds")]
         Platform::Nds => (318, 282),
-        Platform::Gb | Platform::Gbc | Platform::Pico8 => (312, 277),
+        Platform::Gb | Platform::Gbc => (312, 277),
+        Platform::Pico8 => crate::pico8_cart::PICO8_BOX,
     }
 }
 
@@ -110,8 +113,26 @@ impl Shelf {
         }
     }
 
-    fn shell(&self, i: usize) -> Option<GbShell> {
-        self.carts.get(i).and_then(|c| shelf_shape(c).0)
+    fn shape(&self, i: usize) -> CartShape {
+        self.carts.get(i).map_or(CartShape::Gba, |c| shelf_shape(c).0)
+    }
+
+    fn shadow_of(&self, shape: CartShape) -> Option<TexId> {
+        match shape {
+            CartShape::Gba => self.shadow,
+            CartShape::Gb(GbShell::Notched) => self.gb_shadow,
+            CartShape::Gb(GbShell::Rounded) => self.gbc_shadow,
+            CartShape::Pico8 => self.pico8_shadow,
+        }
+    }
+
+    fn backing_of(&self, shape: CartShape) -> Option<TexId> {
+        match shape {
+            CartShape::Gba => self.backing,
+            CartShape::Gb(GbShell::Notched) => self.gb_backing,
+            CartShape::Gb(GbShell::Rounded) => self.gbc_backing,
+            CartShape::Pico8 => self.pico8_backing,
+        }
     }
 
     fn clear(&self, i: usize) -> bool {
@@ -220,8 +241,11 @@ impl Shelf {
         match shell {
             GbShell::Notched => self.gb_shadow = Some(face),
             GbShell::Rounded => self.gbc_shadow = Some(face),
-            GbShell::Pico8 => self.pico8_shadow = Some(face),
         }
+    }
+
+    pub fn set_pico8_shadow(&mut self, face: TexId) {
+        self.pico8_shadow = Some(face);
     }
 
     pub fn set_backing(&mut self, face: TexId) {
@@ -232,8 +256,11 @@ impl Shelf {
         match shell {
             GbShell::Notched => self.gb_backing = Some(face),
             GbShell::Rounded => self.gbc_backing = Some(face),
-            GbShell::Pico8 => self.pico8_backing = Some(face),
         }
+    }
+
+    pub fn set_pico8_backing(&mut self, face: TexId) {
+        self.pico8_backing = Some(face);
     }
 
     pub fn set_faces(&mut self, faces: Vec<TexId>) {
@@ -301,12 +328,7 @@ impl Shelf {
         if !self.clear(i) || self.face(i).is_none() {
             return [None, None];
         }
-        let board = match self.shell(i) {
-            None => self.backing,
-            Some(GbShell::Notched) => self.gb_backing,
-            Some(GbShell::Rounded) => self.gbc_backing,
-            Some(GbShell::Pico8) => self.pico8_backing,
-        };
+        let board = self.backing_of(self.shape(i));
         [self.interiors.get(i).copied().flatten(), board]
     }
 
@@ -469,8 +491,8 @@ impl Shelf {
         Some((self.index as i32 + off).rem_euclid(n) as usize)
     }
 
-    pub fn selected_shell(&self) -> Option<GbShell> {
-        self.shell(self.index)
+    pub fn selected_shape(&self) -> CartShape {
+        self.shape(self.index)
     }
 
     pub fn selected_at(&self, canvas: Canvas) -> (f32, f32) {
@@ -532,13 +554,8 @@ impl Shelf {
     fn layers(&self, i: usize, rect: [f32; 4], alpha: f32, out: &mut Vec<Draw>) {
         let [x, y, w, h] = rect;
         if self.clear(i) && self.face(i).is_some() {
-            let board = match self.shell(i) {
-                None => self.backing,
-                Some(GbShell::Notched) => self.gb_backing,
-                Some(GbShell::Rounded) => self.gbc_backing,
-                Some(GbShell::Pico8) => self.pico8_backing,
-            };
-            let gba = self.shell(i).is_none();
+            let board = self.backing_of(self.shape(i));
+            let gba = !self.shape(i).tall();
             // A GBA cart's board and back shell fill the cart's box, exactly where the
             // picker lifts them from; a Game Boy pak's backing fills its box.
             let Placed {
@@ -697,12 +714,7 @@ impl Shelf {
                 continue;
             }
             if alpha < 1.0 && !is_ds(cart.platform) {
-                let backing = match self.shell(i) {
-                    None => self.shadow,
-                    Some(GbShell::Notched) => self.gb_shadow,
-                    Some(GbShell::Rounded) => self.gbc_shadow,
-                    Some(GbShell::Pico8) => self.pico8_shadow,
-                };
+                let backing = self.shadow_of(self.shape(i));
                 if let Some(tex) = backing {
                     out.push(Draw::Tex {
                         x,
@@ -716,7 +728,7 @@ impl Shelf {
             }
             self.layers(i, [x, y, w, h], alpha * dim, out);
             if let (Some(true), Some((tex, sw, sh))) = (self.hearted.get(i), self.heart) {
-                let (lx, ly, lw, _) = label_rect(self.shell(i));
+                let (lx, ly, lw, _) = label_rect(self.shape(i));
                 out.push(Draw::Tex {
                     x: (x + (lx + lw) * w - sw - HEART_INSET).round(),
                     y: (y + ly * h + HEART_INSET).round(),

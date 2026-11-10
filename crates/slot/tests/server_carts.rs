@@ -112,7 +112,7 @@ fn drawn(cart: &Cart) -> Vec<u8> {
         return face;
     }
     let mut out = cart_interior(cart).rgba;
-    over(&mut out, &cart_backing(gb_shell_of(cart)).rgba);
+    over(&mut out, &cart_backing(slot_ui::cart_shape(cart)).rgba);
     over(&mut out, &face);
     out
 }

@@ -10,6 +10,7 @@ mod barcode;
 mod battery;
 mod board;
 mod cart;
+mod pico8_cart;
 mod checkbox;
 mod edit_text;
 mod clock;
@@ -66,11 +67,15 @@ pub use board::{
 };
 pub use cart::{
     bare_face, cart_backing, cart_box, cart_face, cart_face_with, cart_interior, cart_shadow, clean_label,
-    folder_gb_shell, gb_cart_shadow, gb_shell_of, is_clear, label_colour, label_panel, label_size,
+    cart_shape, folder_gb_shell, gb_cart_shadow, gb_shell_of, is_clear, shape_shadow,
+    shaped_backing, CartShape, label_colour, label_panel, label_size,
     label_tags, label_text, neutral_shell, seated_box, shelf_shape, shows_interior, text_label, CartFace, CART_H, CART_W,
     GBC_LABEL_H, GBC_LABEL_W, GBC_LABEL_X, GBC_LABEL_Y, GB_CART_H, GB_CART_W, GB_LABEL_H,
     GB_LABEL_W, GB_LABEL_X, GB_LABEL_Y, LABEL_H, LABEL_W, LABEL_WELL, LABEL_X, LABEL_Y,
-    PICO8_LABEL_H, PICO8_LABEL_W, PICO8_LABEL_X, PICO8_LABEL_Y,
+};
+pub use pico8_cart::{
+    pico8_silhouette, PICO8_CART_H, PICO8_CART_W, PICO8_LABEL_H, PICO8_LABEL_W, PICO8_LABEL_X,
+    PICO8_LABEL_Y,
 };
 #[cfg(feature = "nds")]
 pub use cart::{DS_LABEL_H, DS_LABEL_W, DS_LABEL_X, DS_LABEL_Y};

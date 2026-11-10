@@ -20,7 +20,7 @@ fn boot_takes_game_boy_shapes_from_the_saved_index() {
         .expect("the pak was scanned");
     assert_eq!(
         slot_ui::shelf_shape(cart).0,
-        Some(slot_ui::GbShell::Rounded)
+        slot_ui::CartShape::Gb(slot_ui::GbShell::Rounded)
     );
 }
 

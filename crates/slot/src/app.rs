@@ -16,7 +16,7 @@ use slot_store::{
 use slot_ui::{
     board_from_shaped, draw_empty_slot, draw_footer, draw_ground, draw_sticker, ease, footer_ink,
     grown, lid_at, lid_from_shaped, lift_of, repeat_gap, seats, shelf_cart_shaped, BezelArt,
-    ClockFaces, ClockPicker, ClockRow, ClockScreen, Draw, FfState, GbShell, Guide, Hud, HudKind,
+    CartShape, ClockFaces, ClockPicker, ClockRow, ClockScreen, Draw, FfState, GbShell, Guide, Hud, HudKind,
     Icon, LinkBadge, Millis, Placed, Polaroids, PowerChoice, QuickMenu, QuickMenuFaces, QuickRow,
     QuickValue, Refusal, Seats, Shelf, ShotMode, ShotViewer, SlotChrome, TexId, Toast, CART_W,
     GBA_SEATS, HINT_EDGE, HOP_LIFT, MOUTH_H, REPEAT_DELAY_MS, SHADOW_H, SHADOW_W, TURN_PAD,
@@ -3740,6 +3740,18 @@ impl App {
     pub fn set_gb_cart_backing(&mut self, shell: GbShell, face: TexId) {
         for (_, shelf) in &mut self.shelves {
             shelf.set_gb_backing(shell, face);
+        }
+    }
+
+    pub fn set_pico8_cart_shadow(&mut self, face: TexId) {
+        for (_, shelf) in &mut self.shelves {
+            shelf.set_pico8_shadow(face);
+        }
+    }
+
+    pub fn set_pico8_cart_backing(&mut self, face: TexId) {
+        for (_, shelf) in &mut self.shelves {
+            shelf.set_pico8_backing(face);
         }
     }
 
@@ -9051,7 +9063,7 @@ impl App {
 
     fn draw_lid_shadow(
         &self,
-        shell: Option<GbShell>,
+        shape: CartShape,
         shelf: Placed,
         progress: f32,
         out: &mut Vec<Draw>,
@@ -9060,7 +9072,7 @@ impl App {
             return;
         };
         let lift = lift_of(progress);
-        let (lid, _) = lid_from_shaped(self.canvas(), shell, shelf, progress);
+        let (lid, _) = lid_from_shaped(self.canvas(), shape, shelf, progress);
         let k = lid.w / lid_at(self.canvas(), 1.0).0.w;
         let (w, h) = (LID_SHADOW_W * k, LID_SHADOW_H * k);
         out.push(Draw::Tex {
@@ -9147,9 +9159,9 @@ impl App {
         let progress = picker.openness(now);
         let lift = lift_of(progress);
         let (rest, scale) = self.shelf().selected_at(self.canvas());
-        let shell = self.shelf().selected_shell();
-        let shelf = shelf_cart_shaped(self.canvas(), shell, rest, scale);
-        let board = board_from_shaped(self.canvas(), shell, shelf, progress);
+        let shape = self.shelf().selected_shape();
+        let shelf = shelf_cart_shaped(self.canvas(), shape, rest, scale);
+        let board = board_from_shaped(self.canvas(), shape, shelf, progress);
         let ready = self.core_faces_ready();
 
         if ready {
@@ -9173,13 +9185,13 @@ impl App {
                     alpha: 1.0,
                 });
             }
-            let (sockets, chips, blank) = match shell {
-                Some(_) => (
+            let (sockets, chips, blank) = match shape.tall() {
+                true => (
                     &self.core_gb_socket_faces,
                     &self.core_gb_chip_faces,
                     self.core_gb_blank_chip_face,
                 ),
-                None => (
+                false => (
                     &self.core_socket_faces,
                     &self.core_chip_faces,
                     self.core_blank_chip_face,
@@ -9187,7 +9199,7 @@ impl App {
             };
             self.draw_board_chip(
                 board,
-                seats(shell),
+                seats(shape),
                 picker.pair(),
                 sockets,
                 picker.chip(now),
@@ -9198,11 +9210,11 @@ impl App {
             );
         }
 
-        self.draw_lid_shadow(shell, shelf, progress, out);
+        self.draw_lid_shadow(shape, shelf, progress, out);
 
         if ready {
             if let Some(tex) = self.core_lid_face {
-                let (lid, turn) = lid_from_shaped(self.canvas(), shell, shelf, progress);
+                let (lid, turn) = lid_from_shaped(self.canvas(), shape, shelf, progress);
                 let at = grown(lid, TURN_PAD as f32 * lid.w / CART_W as f32);
                 out.push(Draw::Turned {
                     x: at.x,
@@ -9218,7 +9230,7 @@ impl App {
             .selected_stem()
             .and_then(|stem| self.shelf().find(stem))
         {
-            let (lid, turn) = lid_from_shaped(self.canvas(), shell, shelf, progress);
+            let (lid, turn) = lid_from_shaped(self.canvas(), shape, shelf, progress);
             out.push(Draw::Turned {
                 x: lid.x,
                 y: lid.y,
@@ -11307,9 +11319,18 @@ impl App {
                 0.72,
                 [slot_ui::GB_LABEL_X, slot_ui::GB_LABEL_Y, slot_ui::GB_LABEL_W, slot_ui::GB_LABEL_H],
             ),
-            Platform::Gbc | Platform::Pico8 => (
+            Platform::Gbc => (
                 0.72,
                 [slot_ui::GBC_LABEL_X, slot_ui::GBC_LABEL_Y, slot_ui::GBC_LABEL_W, slot_ui::GBC_LABEL_H],
+            ),
+            Platform::Pico8 => (
+                0.72,
+                [
+                    slot_ui::PICO8_LABEL_X,
+                    slot_ui::PICO8_LABEL_Y,
+                    slot_ui::PICO8_LABEL_W,
+                    slot_ui::PICO8_LABEL_H,
+                ],
             ),
         };
         let (fw, fh) = (tex.w as f32, tex.h as f32);
@@ -13100,7 +13121,7 @@ impl App {
                 colour: [r, g, b, TARNISH_ALPHA * (1.0 - clean)],
             });
         }
-        self.draw_lid_shadow(None, slot_ui::shelf_cart(canvas), open, out);
+        self.draw_lid_shadow(CartShape::Gba, slot_ui::shelf_cart(canvas), open, out);
         let (lid, turn) = lid_at(canvas, open);
         self.draw_update_cart(cart, lid, turn, 1.0, out);
     }

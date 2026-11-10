@@ -5,7 +5,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use slot_store::{Cart, Outline, ShellChoice, ShellFinish};
 use slot_ui::house_label::{pale_for, Label};
 use slot_ui::{
-    bare_face, cart_backing, cart_face_with, cart_interior, cover, gb_shell_of, label_size,
+    bare_face, cart_backing, cart_face_with, cart_interior, cover, cart_shape, label_size,
     shell_for, shell_presets, shows_interior, CartFace, Finish,
 };
 
@@ -101,7 +101,7 @@ pub fn build(job: PreviewJob, cache: &mut Cache) -> StudioFaces {
         gen: job.gen,
         bare: bare_face(&job.cart),
         under: shows_interior(&job.cart)
-            .then(|| [cart_interior(&job.cart), cart_backing(gb_shell_of(&job.cart))]),
+            .then(|| [cart_interior(&job.cart), cart_backing(cart_shape(&job.cart))]),
         faces,
     }
 }
@@ -141,7 +141,7 @@ fn plastic_chip(cart: &Cart, shell: ShellChoice) -> Vec<u8> {
     let mut tinted = cart.clone();
     tinted.shell = Some(shell);
     let face = bare_face(&tinted);
-    let backing = cart_backing(gb_shell_of(&tinted));
+    let backing = cart_backing(cart_shape(&tinted));
     let (x0, y0) = (face.w / 2 - 10, face.h / 2 - 10);
     let mut out = Vec::with_capacity((CHIP * CHIP * 4) as usize);
     for y in 0..CHIP {

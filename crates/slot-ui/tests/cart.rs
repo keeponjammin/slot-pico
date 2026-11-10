@@ -757,7 +757,7 @@ fn the_label_sits_inside_the_bitmap_and_the_corner_stays_clear() {
 
 #[test]
 fn a_gba_cart_is_backed_by_the_whole_picker_board() {
-    let back = slot_ui::cart_backing(None);
+    let back = slot_ui::cart_backing(slot_ui::CartShape::Gba);
     assert_eq!((back.w, back.h), (CART_W, CART_H));
     assert_eq!((back.w, back.h), (slot_ui::BOARD_W, slot_ui::BOARD_H));
     let alpha = |x: u32, y: u32| back.rgba[((y * back.w + x) * 4) as usize + 3];
@@ -770,7 +770,7 @@ fn a_gba_cart_is_backed_by_the_whole_picker_board() {
         0,
         "the board is not a bare circuit board: its corner is painted"
     );
-    let pak = slot_ui::cart_backing(Some(GbShell::Notched));
+    let pak = slot_ui::cart_backing(slot_ui::CartShape::Gb(GbShell::Notched));
     assert_eq!((pak.w, pak.h), (GB_CART_W, GB_CART_H));
     let mid = pak.rgba[(((pak.h / 2) * pak.w + pak.w / 2) * 4 + 3) as usize];
     assert!(mid > 200, "the pak board is empty in the middle");
@@ -791,19 +791,20 @@ fn pico8_cart(shell: Option<slot_store::ShellChoice>) -> slot_store::Cart {
 #[test]
 fn a_pico8_cart_is_its_own_mould_with_a_square_label() {
     let cart = pico8_cart(None);
-    assert_eq!(slot_ui::gb_shell_of(&cart), Some(GbShell::Pico8));
-    assert_eq!(slot_ui::shelf_shape(&cart).0, Some(GbShell::Pico8));
-    assert_eq!(slot_ui::folder_gb_shell(&cart), Some(GbShell::Pico8));
+    assert_eq!(slot_ui::cart_shape(&cart), slot_ui::CartShape::Pico8);
+    assert_eq!(slot_ui::shelf_shape(&cart).0, slot_ui::CartShape::Pico8);
+    assert_eq!(slot_ui::gb_shell_of(&cart), None, "a PICO-8 cart is no Game Boy pak");
+    assert_eq!(slot_ui::folder_gb_shell(&cart), None);
     assert_eq!(PICO8_LABEL_W, PICO8_LABEL_H, "PICO-8 labels are square");
     assert_eq!(slot_ui::label_size(&cart), (PICO8_LABEL_W, PICO8_LABEL_H));
     let face = cart_face(&cart);
-    assert_eq!((face.w, face.h), (GB_CART_W, GB_CART_H));
+    assert_eq!((face.w, face.h), (slot_ui::PICO8_CART_W, slot_ui::PICO8_CART_H));
     assert_eq!(
         pixel_alpha(&face, PICO8_LABEL_X + PICO8_LABEL_W / 2, PICO8_LABEL_Y + PICO8_LABEL_H / 2),
         255
     );
 
-    let pico8 = gb_silhouette(GbShell::Pico8, GB_CART_W, GB_CART_H);
+    let pico8 = slot_ui::pico8_silhouette();
     let rounded = gb_silhouette(GbShell::Rounded, GB_CART_W, GB_CART_H);
     let apart: u32 = pico8
         .iter()

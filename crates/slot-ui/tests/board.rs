@@ -425,7 +425,7 @@ fn a_game_boy_cart_shows_its_own_board() {
         ..cart("Tetris", "")
     };
     let face = board_face(&gb);
-    let backing = slot_ui::cart_backing(slot_ui::gb_shell_of(&gb));
+    let backing = slot_ui::cart_backing(slot_ui::cart_shape(&gb));
     assert_eq!((face.w, face.h), (slot_ui::GB_CART_W, slot_ui::GB_CART_H));
     let at = |f: &slot_ui::CartFace, x: u32, y: u32| {
         let i = ((y * f.w + x) * 4) as usize;
@@ -445,13 +445,13 @@ fn a_gba_cart_keeps_the_gba_picker_geometry() {
     let shelf = shelf_cart(canvas);
     for p in [0.0, 0.3, 0.7, 1.0] {
         assert_eq!(
-            slot_ui::board_from_shaped(canvas, None, shelf, p),
+            slot_ui::board_from_shaped(canvas, slot_ui::CartShape::Gba, shelf, p),
             slot_ui::board_from(canvas, shelf, p)
         );
         assert_eq!(
-            slot_ui::lid_from_shaped(canvas, None, shelf, p),
+            slot_ui::lid_from_shaped(canvas, slot_ui::CartShape::Gba, shelf, p),
             slot_ui::lid_from(canvas, shelf, p)
         );
     }
-    assert_eq!(slot_ui::seats(None), slot_ui::GBA_SEATS);
+    assert_eq!(slot_ui::seats(slot_ui::CartShape::Gba), slot_ui::GBA_SEATS);
 }
