@@ -669,6 +669,9 @@ pub struct App {
     kid_prompt: Option<KidMode>,
     kid_unlocked: bool,
     seated_platform: Option<Platform>,
+    /// Whether the cart in the slot is played by handing the device to another program (the
+    /// owner's own PICO-8) instead of a core slot loads. Set as it goes in.
+    seated_outside: bool,
     kid_icon_faces: Option<[(TexId, u32, u32); 2]>,
     pub romm: crate::romm::RommConf,
     quick_palette_faces: Option<[(TexId, u32, u32); 2]>,
@@ -1166,6 +1169,7 @@ impl App {
             kid_prompt: None,
             kid_unlocked: false,
             seated_platform: None,
+            seated_outside: false,
             kid_icon_faces: None,
             romm: crate::romm::RommConf::default(),
             quick_palette_faces: None,
@@ -1309,7 +1313,7 @@ impl App {
         };
         self.phase = Phase::Shelf;
         match seated {
-            Some((at, i)) if self.shelves[at].1.carts[i].platform.runs_outside() => {
+            Some((at, i)) if self.hands_off(&self.shelves[at].1.carts[i]) => {
                 self.shelf_at = at;
                 self.shelf_mut().select(i);
                 self.eject_on_return(i);
@@ -1338,6 +1342,7 @@ impl App {
         let cart = self.shelf().carts[i].clone();
         eprintln!("slot: {} came back from {}, ejecting", cart.stem, cart.platform.name());
         self.seated_platform = Some(cart.platform);
+        self.seated_outside = true;
         self.phase = Phase::Ejecting {
             cart: cart.stem,
             t: -EJECT_HOLD_S,
@@ -2598,6 +2603,9 @@ impl App {
         if self.single_cart() {
             hidden.push(QuickRow::ExitGame);
         }
+        if self.playing_platform() == Platform::Pico8 {
+            hidden.extend([QuickRow::Bezel, QuickRow::Overlay, QuickRow::Rewind]);
+        }
         if self.playing_platform().hardware() != Platform::Gba {
             hidden.extend([QuickRow::GameL, QuickRow::GameR]);
         }
@@ -3171,9 +3179,9 @@ impl App {
     }
 
     pub fn resolved_bezel(&self, platform: Platform) -> BezelPick {
-        // A program slot hands the device to draws its own whole screen: nothing goes around it,
-        // not even while its screen powers on.
-        if platform.runs_outside() {
+        // PICO-8's square screen has nothing made to go around it, on fake-08 or on the owner's
+        // own PICO-8, which draws its whole screen itself, even while its screen powers on.
+        if platform == Platform::Pico8 {
             return BezelPick::None;
         }
         let pick = match platform {
@@ -3242,7 +3250,7 @@ impl App {
     }
 
     pub fn resolved_overlay(&self, platform: Platform) -> Option<slot_store::OverlayEntry> {
-        if platform.runs_outside() {
+        if platform == Platform::Pico8 {
             return None;
         }
         let pick = match platform {
@@ -4508,7 +4516,7 @@ impl App {
     }
 
     pub fn may_rewind(&self) -> bool {
-        self.state.rewind && !self.link_active()
+        self.state.rewind && !self.link_active() && self.playing_platform() != Platform::Pico8
     }
 
     pub fn turbo(&self) -> bool {
@@ -4518,6 +4526,10 @@ impl App {
     pub fn records_rewind(&self) -> bool {
         #[cfg(feature = "nds")]
         if self.playing_platform() == Platform::Nds {
+            return false;
+        }
+        // A fake-08 state is over a megabyte of RAM and Lua: too much to take every few frames.
+        if self.playing_platform() == Platform::Pico8 {
             return false;
         }
         self.state.rewind
@@ -9301,10 +9313,12 @@ impl App {
         }) else {
             return;
         };
-        if platform.runs_outside() && !self.can_hand_off(at) {
+        let outside = self.hands_off(&self.shelf().carts[at]);
+        if outside && !self.can_hand_off(at) {
             return self.refuse();
         }
         self.seated_platform = Some(platform);
+        self.seated_outside = outside;
         eprintln!(
             "slot: launch: insert {cart} at {:.1} ms",
             crate::boot_time::ms()
@@ -9315,7 +9329,7 @@ impl App {
         self.sunlight_manual = None;
         self.stop_romm();
         // A cart slot hands off never loads a core here, so it cannot take slot down loading.
-        if let Some(mark) = self.loading.as_ref().filter(|_| !platform.runs_outside()) {
+        if let Some(mark) = self.loading.as_ref().filter(|_| !outside) {
             mark.set(&cart);
             self.marked = true;
             self.playing_since = None;
@@ -9327,6 +9341,27 @@ impl App {
             resumed: false,
             clean,
         };
+    }
+
+    /// Whether playing `cart` hands the device to another program instead of loading a core:
+    /// the Splore card, which only the owner's PICO-8 can open, or a PICO-8 cart whose core
+    /// is set to PICO-8 over fake-08.
+    fn hands_off(&self, cart: &Cart) -> bool {
+        if cart.platform != Platform::Pico8 {
+            return false;
+        }
+        if crate::pico8::is_splore(&cart.rom) {
+            return true;
+        }
+        self.root.as_ref().is_some_and(|root| {
+            slot_store::core_for_platform(root, &cart.stem, cart.platform, self.state.gb_core)
+                .runs_outside()
+        })
+    }
+
+    /// Whether the cart in the slot is played by handing the device over, not by a core.
+    pub fn seated_outside(&self) -> bool {
+        self.seated_outside && self.seated_cart().is_some()
     }
 
     /// Whether the cart at `at` can be handed to the program it runs in, checked before it is
@@ -9363,7 +9398,7 @@ impl App {
             self.phase,
             Phase::Inserting { t, resumed: false, .. } if t >= HAND_OFF_AT
         );
-        if ready && self.seated_cart().is_some_and(|c| c.platform.runs_outside()) {
+        if ready && self.seated_outside {
             self.hand_off();
         }
     }
@@ -9624,7 +9659,7 @@ impl App {
         let Some(cart) = self.shelf().carts.get(self.shelf().index) else {
             return;
         };
-        if cart.platform.runs_outside() {
+        if crate::pico8::is_splore(&cart.rom) {
             return;
         }
         let seat =

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- PICO-8 has its own shelf. Bring your own copy: put Lexaloffle's Raspberry Pi zip in `BIOS/PICO-8/` and your `.p8` and `.p8.png` carts in `Games/PICO8/`. A Splore cart opens PICO-8's BBS browser over your saved Wi-Fi. slot steps aside while PICO-8 runs: <kbd>MENU</kbd> pauses it under slot's in-game menu, holding <kbd>MENU</kbd> quits back to the same cart, and <kbd>POWER</kbd> or closing the lid turns the screen off. Labels come from the carts themselves.
+- PICO-8 has its own shelf. Put your `.p8` and `.p8.png` carts in `Games/PICO8/` and they play on fake-08, which comes with slot, with save states and the in-game menu like any other game. If you own PICO-8, put Lexaloffle's Raspberry Pi zip in `BIOS/PICO-8/`: press START on a cart to play it on your own copy instead, and a Splore cart opens PICO-8's BBS browser over your saved Wi-Fi. Both keep game saves in `Saves/PICO8/cdata/`. slot steps aside while PICO-8 runs: <kbd>MENU</kbd> pauses it under slot's in-game menu, holding <kbd>MENU</kbd> quits back to the same cart, and <kbd>POWER</kbd> or closing the lid turns the screen off. Labels come from the carts themselves.
 
 ## [1.15.2](https://github.com/slot-cfw/slot/releases/tag/v1.15.2)
 

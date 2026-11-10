@@ -4,6 +4,10 @@ use slot::link_kind::{serial_option, LinkKind};
 use slot_retro::LibretroCore;
 use slot_store::{Blending, Core, Platform};
 
+/// The cores slot sets Game Boy and Game Boy Advance options on. fake-08 takes only the
+/// fixed picture options it is opened with, and PICO-8 is no core slot loads.
+const GAME_BOY_CORES: [Core; 3] = [Core::Mgba, Core::Gpsp, Core::Gambatte];
+
 fn dylib_for(core: Core) -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../vendor")
@@ -56,7 +60,7 @@ fn every_option_is_one_the_core_has(core: &LibretroCore, what: &str) {
 fn every_option_slot_sets_is_one_the_core_declares() {
     let _g = common::core_lock();
     let mut ran = 0;
-    for which in Core::ALL {
+    for which in GAME_BOY_CORES {
         let path = dylib_for(which);
         if !path.exists() {
             eprintln!("no {} dylib on this host, skipping", which.as_str());
@@ -354,7 +358,7 @@ fn mgba_answers_the_game_boy_player_logo_except_for_gba_video() {
 #[test]
 fn every_frame_blending_slot_sets_is_one_the_core_declares() {
     let _g = common::core_lock();
-    for which in Core::ALL {
+    for which in GAME_BOY_CORES {
         let path = dylib_for(which);
         if !path.exists() {
             eprintln!("no {} dylib on this host, skipping", which.as_str());
@@ -510,7 +514,7 @@ fn frames_with_mix_set_at(which: Core, at: Option<usize>) -> Vec<Vec<u8>> {
 #[test]
 fn a_frame_blending_change_reaches_a_running_core_without_a_reload() {
     let _g = common::core_lock();
-    for which in Core::ALL {
+    for which in GAME_BOY_CORES {
         if !dylib_for(which).exists() {
             eprintln!("no {} dylib on this host, skipping", which.as_str());
             continue;

@@ -304,8 +304,8 @@ fn writing_a_core_moves_a_line_without_a_system_onto_one_with() {
 
 #[cfg(not(feature = "nds"))]
 #[test]
-fn the_core_list_has_three_entries() {
-    assert_eq!(Core::ALL.len(), 3);
+fn the_core_list_has_five_entries() {
+    assert_eq!(Core::ALL.len(), 5);
 }
 
 #[cfg(feature = "nds")]

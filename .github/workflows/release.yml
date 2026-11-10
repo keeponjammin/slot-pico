@@ -38,6 +38,8 @@ jobs:
           file "$out/System/mgba_libretro.so" | grep -q aarch64
           file "$out/System/gpsp_libretro.so" | grep -q aarch64
           file "$out/System/gambatte_libretro.so" | grep -q aarch64
+          file "$out/System/fake08_libretro.so" | grep -q aarch64
+          test -f "$out/System/licenses/fake-08.txt"
           test -x "$out/System/slot"
           file "$out/System/pico8_sdl.so" | grep -q "32-bit.*ARM"
           gpsp_src_sha="$(cat vendor/gpsp-src.sha)"

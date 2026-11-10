@@ -30,9 +30,9 @@ fn served() -> impl Iterator<Item = Platform> {
     #[cfg(feature = "nds")]
     return Platform::ALL
         .into_iter()
-        .filter(|p| *p != Platform::Nds && !p.runs_outside());
+        .filter(|p| *p != Platform::Nds && *p != Platform::Pico8);
     #[cfg(not(feature = "nds"))]
-    Platform::ALL.into_iter().filter(|p| !p.runs_outside())
+    Platform::ALL.into_iter().filter(|p| *p != Platform::Pico8)
 }
 
 fn platform_for(tag: &str) -> Option<Platform> {

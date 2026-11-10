@@ -147,7 +147,15 @@ fn open_named(
     paths: &[PathBuf],
 ) -> Option<Box<dyn RetroCore>> {
     let bios = root::bios_dir(root);
-    let saves = root::saves_dir(root);
+    // fake-08 keeps cart data where the owner's PICO-8 does, in the same files, so a game saved
+    // on one core carries on on the other.
+    let saves = match core {
+        Core::Fake08 => crate::pico8::home_dir(root),
+        _ => root::saves_dir(root),
+    };
+    if let Err(e) = std::fs::create_dir_all(&saves) {
+        eprintln!("slot: {}: {e}", saves.display());
+    }
     for path in paths {
         if !path.exists() {
             continue;
@@ -227,6 +235,7 @@ pub fn colour_option(
             "gpsp_color_correction",
             if on { "enabled" } else { "disabled" },
         )),
+        Core::Fake08 | Core::Pico8 => None,
         Core::Gambatte => Some((
             "gambatte_gbc_color_correction",
             if !on {
@@ -272,12 +281,17 @@ pub fn blend_option(which: Core, blending: Blending) -> (&'static str, &'static 
         (Core::Gambatte, Blending::Off) => ("gambatte_mix_frames", "disabled"),
         (Core::Gambatte, Blending::Mix) => ("gambatte_mix_frames", "mix"),
         (Core::Gambatte, Blending::Ghosting) => ("gambatte_mix_frames", "lcd_ghosting"),
+        (Core::Fake08 | Core::Pico8, _) => ("fake08_blending", "off"),
         #[cfg(feature = "nds")]
         (Core::Dsperate, _) => ("dsperate_blending", "off"),
     }
 }
 
 pub fn apply_blending(core: &mut LibretroCore, which: Core, blending: Blending) {
+    // PICO-8 draws whole frames on a backlit screen: fake-08 has no blending to set.
+    if matches!(which, Core::Fake08 | Core::Pico8) {
+        return;
+    }
     let (key, value) = blend_option(which, blending);
     core.set_option(key, value);
 }
@@ -308,6 +322,14 @@ fn init_options(core: Core) -> &'static [(&'static str, &'static str)] {
             ("gambatte_gb_bootloader", "enabled"),
             ("gambatte_rumble_level", "10"),
         ],
+        // PICO-8's own 128 by 128 picture, uncropped: slot does the scaling.
+        Core::Fake08 => &[
+            ("fake08_video_scale", "1x"),
+            ("fake08_crop_h_left", "0"),
+            ("fake08_crop_h_right", "0"),
+            ("fake08_crop_v_top", "0"),
+            ("fake08_crop_v_bottom", "0"),
+        ],
         _ => &[],
     }
 }
@@ -321,7 +343,7 @@ pub fn apply_core_options(
     colour: bool,
     palette: Option<GbColors>,
 ) {
-    if which != Core::Gambatte {
+    if matches!(which, Core::Mgba | Core::Gpsp) {
         core.set_option(&format!("{}_frameskip", which.as_str()), "auto");
     }
     if which == Core::Mgba {

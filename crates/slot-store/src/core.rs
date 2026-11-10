@@ -11,21 +11,40 @@ pub enum Core {
     Mgba,
     Gpsp,
     Gambatte,
+    /// fake-08, the libretro PICO-8 core that plays PICO-8 carts inside slot.
+    Fake08,
+    /// The owner's own PICO-8, which slot hands the device to instead of loading a core.
+    Pico8,
     #[cfg(feature = "nds")]
     Dsperate,
 }
 
 impl Core {
     #[cfg(not(feature = "nds"))]
-    pub const ALL: [Core; 3] = [Core::Mgba, Core::Gpsp, Core::Gambatte];
+    pub const ALL: [Core; 5] = [
+        Core::Mgba,
+        Core::Gpsp,
+        Core::Gambatte,
+        Core::Fake08,
+        Core::Pico8,
+    ];
     #[cfg(feature = "nds")]
-    pub const ALL: [Core; 4] = [Core::Mgba, Core::Gpsp, Core::Gambatte, Core::Dsperate];
+    pub const ALL: [Core; 6] = [
+        Core::Mgba,
+        Core::Gpsp,
+        Core::Gambatte,
+        Core::Fake08,
+        Core::Pico8,
+        Core::Dsperate,
+    ];
 
     pub fn as_str(&self) -> &'static str {
         match self {
             Core::Mgba => "mgba",
             Core::Gpsp => "gpsp",
             Core::Gambatte => "gambatte",
+            Core::Fake08 => "fake08",
+            Core::Pico8 => "pico8",
             #[cfg(feature = "nds")]
             Core::Dsperate => "dsperate",
         }
@@ -40,6 +59,8 @@ impl Core {
             Core::Mgba => "mGBA",
             Core::Gpsp => "gpSP",
             Core::Gambatte => "Gambatte",
+            Core::Fake08 => "fake-08",
+            Core::Pico8 => "PICO-8",
             #[cfg(feature = "nds")]
             Core::Dsperate => "DSperate",
         }
@@ -50,6 +71,8 @@ impl Core {
             "mgba" => Some(Core::Mgba),
             "gpsp" => Some(Core::Gpsp),
             "gambatte" => Some(Core::Gambatte),
+            "fake08" => Some(Core::Fake08),
+            "pico8" => Some(Core::Pico8),
             #[cfg(feature = "nds")]
             "dsperate" => Some(Core::Dsperate),
             _ => None,
@@ -60,12 +83,19 @@ impl Core {
         match self {
             #[cfg(feature = "nds")]
             _ if platform == Platform::Nds => self == Core::Dsperate,
-            Core::Mgba => true,
+            Core::Mgba => platform != Platform::Pico8,
             Core::Gpsp => platform.hardware() == Platform::Gba,
             Core::Gambatte => matches!(platform, Platform::Gb | Platform::Gbc),
+            Core::Fake08 | Core::Pico8 => platform == Platform::Pico8,
             #[cfg(feature = "nds")]
             Core::Dsperate => false,
         }
+    }
+
+    /// Whether slot hands the device to another program to play a cart, instead of loading
+    /// this core itself.
+    pub fn runs_outside(self) -> bool {
+        self == Core::Pico8
     }
 
     pub fn pair(platform: Platform) -> [Core; 2] {
@@ -74,7 +104,7 @@ impl Core {
             Platform::Gb | Platform::Gbc => [Core::Mgba, Core::Gambatte],
             #[cfg(feature = "nds")]
             Platform::Nds => [Core::Dsperate, Core::Dsperate],
-            Platform::Pico8 => [Core::Mgba, Core::Mgba],
+            Platform::Pico8 => [Core::Fake08, Core::Pico8],
         }
     }
 }
@@ -98,6 +128,7 @@ pub fn core_for_platform(root: &Path, stem: &str, platform: Platform, gb_core: C
             Platform::Gb | Platform::Gbc if gb_core.runs(platform) => gb_core,
             #[cfg(feature = "nds")]
             Platform::Nds => Core::Dsperate,
+            Platform::Pico8 => Core::Fake08,
             _ => Core::Mgba,
         })
 }
