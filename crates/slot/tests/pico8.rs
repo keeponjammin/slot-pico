@@ -410,6 +410,17 @@ fn the_mapping_is_read_from_sysfs() {
     );
 }
 
+/// `SLOT_RUN` is one variable for the whole test binary: tests that hand off through it take
+/// turns, or one reads the hand-off the other wrote.
+static RUN_VAR: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn hand_off_through(dir: &Path) -> std::sync::MutexGuard<'static, ()> {
+    let held = RUN_VAR.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    std::fs::create_dir_all(dir).unwrap();
+    std::env::set_var(slot::loading_mark::RUN_VAR, dir);
+    held
+}
+
 fn to_pico8_shelf(a: &mut App) {
     for _ in 0..8 {
         if a.shelf_platform_name() == Some("PICO-8") {
@@ -427,8 +438,7 @@ fn to_pico8_shelf(a: &mut App) {
 fn playing_a_pico8_cart_hands_the_device_over_and_comes_back_to_it() {
     let d = TempDir::new().unwrap();
     let run = d.path().join("run");
-    std::fs::create_dir_all(&run).unwrap();
-    std::env::set_var(slot::loading_mark::RUN_VAR, &run);
+    let _turn = hand_off_through(&run);
     install(d.path());
     write_cart(d.path(), "celeste.p8", p8_with_label('c').as_bytes());
     write_cart(d.path(), "jelpi.p8", b"");
@@ -445,8 +455,32 @@ fn playing_a_pico8_cart_hands_the_device_over_and_comes_back_to_it() {
     }
     assert_eq!(a.selected_stem(), Some("jelpi"));
     common::through(&mut a, Btn::A);
-    assert!(a.relaunching(), "playing a PICO-8 cart did not hand off");
-    assert!(matches!(a.phase(), Phase::Shelf), "{:?}", a.phase());
+    assert!(
+        matches!(a.phase(), Phase::Inserting { cart, .. } if cart == "jelpi"),
+        "a PICO-8 cart goes into the slot like any other, not straight to PICO-8: {:?}",
+        a.phase()
+    );
+    let (mut seated, mut lit) = (false, false);
+    let mut frames = 0;
+    while !a.relaunching() {
+        assert!(
+            !run.join(pico8::NEXT_FILE).exists(),
+            "handed off before the insert had played"
+        );
+        a.update(1.0 / 60.0);
+        frames += 1;
+        assert!(frames < 120, "never handed off: {:?}", a.phase());
+        seated |= a.seat() >= 1.0;
+        lit |= a.screen_power() >= 1.0;
+    }
+    assert!(seated, "handed off before the cart was seated");
+    assert!(lit, "handed off before the screen had powered on");
+    let played = frames as f32 / 60.0;
+    assert!(
+        played >= slot::app::HAND_OFF_AT - 1.0 / 60.0,
+        "handed off after {played} s, before the insert's {} s",
+        slot::app::HAND_OFF_AT
+    );
     let next = std::fs::read_to_string(run.join(pico8::NEXT_FILE)).unwrap();
     assert_eq!(
         Launch::decode(&next),
@@ -454,19 +488,79 @@ fn playing_a_pico8_cart_hands_the_device_over_and_comes_back_to_it() {
     );
     let state = slot_store::read_slot_state(d.path());
     assert_eq!(
-        state.cart, None,
-        "a handed-off cart must not restart on boot"
+        (state.cart.as_deref(), state.cart_platform),
+        (Some("jelpi"), Some(Platform::Pico8)),
+        "the cart is in the slot while PICO-8 runs it"
     );
     assert_eq!(
         state.recents.first().map(|r| r.stem.as_str()),
         Some("jelpi")
     );
 
-    let a = App::boot(d.path());
+    let mut a = App::boot(d.path());
+    assert!(
+        matches!(a.phase(), Phase::Ejecting { cart, .. } if cart == "jelpi"),
+        "coming back from PICO-8 ejects the cart instead of starting it again: {:?}",
+        a.phase()
+    );
+    assert_eq!(a.screen_power(), 1.0, "slot comes back to PICO-8's dark screen");
+    assert!(!a.relaunching());
+    // The first steps after boot span starting up and the first, slow render.
+    a.update(1.2);
+    a.update(0.4);
+    assert!(
+        a.screen_power() > 0.5,
+        "long first steps skipped the fade out of the dark: {}",
+        a.screen_power()
+    );
+    let mut fading = 0;
+    while a.screen_power() > 0.0 {
+        a.update(1.0 / 60.0);
+        fading += 1;
+    }
+    assert!(fading >= 5, "the dark was gone in {fading} frames");
+    for _ in 0..120 {
+        a.update(1.0 / 60.0);
+        assert!(!a.relaunching(), "coming back handed the cart off again");
+    }
     assert!(matches!(a.phase(), Phase::Shelf), "{:?}", a.phase());
+    assert_eq!(a.screen_power(), 0.0);
     assert_eq!(a.shelf_platform_name(), Some("PICO-8"));
     assert_eq!(a.selected_stem(), Some("jelpi"));
-    assert!(!a.relaunching());
+    assert_eq!(slot_store::read_slot_state(d.path()).cart, None);
+
+    let a = App::boot(d.path());
+    assert!(
+        matches!(a.phase(), Phase::Shelf),
+        "once ejected, the next boot starts on the shelf: {:?}",
+        a.phase()
+    );
+}
+
+#[test]
+fn ejecting_a_pico8_cart_while_it_goes_in_keeps_slot_running() {
+    let d = TempDir::new().unwrap();
+    let run = d.path().join("run");
+    let _turn = hand_off_through(&run);
+    install(d.path());
+    write_cart(d.path(), "celeste.p8", b"");
+    slot::root::ensure(d.path());
+    std::fs::write(d.path().join("Games/GBA/Emerald.gba"), [0u8; 512]).unwrap();
+    common::clocked(d.path());
+    let mut a = App::boot(d.path());
+    to_pico8_shelf(&mut a);
+    common::through(&mut a, Btn::A);
+    for _ in 0..10 {
+        a.update(1.0 / 60.0);
+    }
+    assert!(matches!(a.phase(), Phase::Inserting { .. }), "{:?}", a.phase());
+    a.apply(slot_input::Action::Eject);
+    for _ in 0..120 {
+        a.update(1.0 / 60.0);
+    }
+    assert!(!a.relaunching(), "an ejected cart was still handed to PICO-8");
+    assert!(!run.join(pico8::NEXT_FILE).exists());
+    assert!(matches!(a.phase(), Phase::Shelf), "{:?}", a.phase());
 }
 
 #[test]
@@ -482,4 +576,28 @@ fn a_pico8_cart_is_refused_until_pico8_is_installed() {
     common::through(&mut a, Btn::A);
     assert!(!a.relaunching());
     assert!(matches!(a.phase(), Phase::Shelf), "{:?}", a.phase());
+}
+
+#[test]
+fn pico8_never_wears_the_game_boy_colors_bezel_or_overlay() {
+    let d = TempDir::new().unwrap();
+    write_cart(d.path(), "celeste.p8", b"");
+    slot::root::ensure(d.path());
+    common::clocked(d.path());
+    let mut state = slot_store::read_slot_state(d.path());
+    state.bezel_gbc = slot_store::BezelPick::Default;
+    state.overlay_gbc = Some("frame.png".into());
+    slot_store::write_slot_state(d.path(), &state).unwrap();
+    let a = App::boot(d.path());
+    assert_eq!(
+        a.resolved_bezel(Platform::Gbc),
+        slot_store::BezelPick::Default,
+        "the Game Boy Color keeps its own"
+    );
+    assert_eq!(
+        a.resolved_bezel(Platform::Pico8),
+        slot_store::BezelPick::None,
+        "PICO-8 draws its whole screen, so its power-on has nothing around it"
+    );
+    assert!(a.resolved_overlay(Platform::Pico8).is_none());
 }
