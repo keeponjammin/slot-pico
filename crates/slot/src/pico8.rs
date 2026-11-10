@@ -579,17 +579,24 @@ pub fn volume(s: &slot_store::SlotState, headphones: bool) -> u32 {
     }
 }
 
-/// The program and arguments that run PICO-8. The binary runs through its
-/// loader, as slot does, because the card's FAT has no executable bit.
+/// The program and arguments that run PICO-8. With `direct` the binary runs
+/// as itself, which it should whenever the card allows: PICO-8 looks for
+/// `pico8.dat` beside `/proc/self/exe`, and through the loader that is `/lib`,
+/// on BaseOS the read-only `/usr/lib`. A card mounted without an executable
+/// bit still gets the loader, as slot does.
 pub fn command_line(
     root: &Path,
     binary: &Path,
     arch: Arch,
     launch: &Launch,
     volume: u32,
+    direct: bool,
 ) -> Vec<String> {
-    let mut args = vec![
-        arch.loader().to_string(),
+    let mut args = Vec::new();
+    if !direct {
+        args.push(arch.loader().to_string());
+    }
+    args.extend([
         binary.display().to_string(),
         "-home".into(),
         home_dir(root).display().to_string(),
@@ -601,16 +608,57 @@ pub fn command_line(
         "0".into(),
         "-volume".into(),
         volume.to_string(),
-    ];
+    ]);
     args.extend(launch.args());
     args
 }
 
+/// Whether the card lets `binary` run as a program of its own.
+pub fn runs_directly(binary: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::metadata(binary).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = binary;
+        false
+    }
+}
+
+/// Where PICO-8 looks for libraries, the owner's own first.
+pub fn library_dirs(install: &Path, arch: Arch) -> Vec<PathBuf> {
+    std::iter::once(install.join("lib"))
+        .chain(arch.library_path().iter().map(PathBuf::from))
+        .collect()
+}
+
 pub fn library_path(install: &Path, arch: Arch) -> String {
-    std::iter::once(install.join("lib").display().to_string())
-        .chain(arch.library_path().iter().map(|s| s.to_string()))
+    library_dirs(install, arch)
+        .iter()
+        .map(|d| d.display().to_string())
         .collect::<Vec<_>>()
         .join(":")
+}
+
+/// The GLES and EGL libraries SDL should load, as `(variable, path)`. Left
+/// to itself, BaseOS's 32-bit SDL asks for `libGLESv2.so`, which no folder
+/// has, and PICO-8 cannot open its window. Each is the first of `dirs` that
+/// has it, so libraries the owner adds win.
+pub fn gl_drivers(dirs: &[PathBuf]) -> Vec<(&'static str, PathBuf)> {
+    [
+        ("SDL_VIDEO_GL_DRIVER", "libGLESv2.so.2"),
+        ("SDL_VIDEO_EGL_DRIVER", "libEGL.so.1"),
+    ]
+    .into_iter()
+    .filter_map(|(var, name)| {
+        dirs.iter()
+            .map(|d| d.join(name))
+            .find(|p| p.is_file())
+            .map(|p| (var, p))
+    })
+    .collect()
 }
 
 /// Loaded ahead of the 32-bit PICO-8: BaseOS's stock SDL2 has no haptics,
@@ -689,7 +737,7 @@ mod runner {
         let mut platform = slot_power::DevicePlatform::new(root.to_path_buf());
         let state = slot_store::read_slot_state(root);
         let volume = volume(&state, platform.headphones());
-        let line = command_line(root, &binary, arch, &launch, volume);
+        let line = command_line(root, &binary, arch, &launch, volume, runs_directly(&binary));
         eprintln!("slot: pico8: {}", line.join(" "));
         let install = binary.parent().unwrap_or(root).to_path_buf();
         let mut command = Command::new(&line[0]);
@@ -699,6 +747,10 @@ mod runner {
             .env("LD_LIBRARY_PATH", library_path(&install, arch))
             .env("HOME", home_dir(root))
             .env("SDL_GAMECONTROLLERCONFIG", mappings.join("\n"));
+        for (var, path) in gl_drivers(&library_dirs(&install, arch)) {
+            eprintln!("slot: pico8: {var}={}", path.display());
+            command.env(var, path);
+        }
         let shim = sdl_shim(root);
         if arch == Arch::Armhf && shim.is_file() {
             command.env("LD_PRELOAD", &shim);

@@ -231,6 +231,56 @@ fn pico8_plays_at_slots_volume() {
 }
 
 #[test]
+fn pico8_runs_itself_so_it_finds_pico8_dat_beside_it() {
+    let line = pico8::command_line(
+        Path::new("/mnt/sdcard"),
+        Path::new("/mnt/sdcard/BIOS/PICO-8/pico8_dyn"),
+        pico8::Arch::Armhf,
+        &Launch::Splore,
+        200,
+        true,
+    );
+    assert_eq!(line[0], "/mnt/sdcard/BIOS/PICO-8/pico8_dyn");
+    assert_eq!(line[1], "-home");
+    assert!(!line.iter().any(|a| a.contains("ld-linux")));
+}
+
+#[cfg(unix)]
+#[test]
+fn only_an_executable_binary_runs_directly() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let d = TempDir::new().unwrap();
+    let bin = d.path().join("pico8_dyn");
+    std::fs::write(&bin, b"\x7fELF").unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(!pico8::runs_directly(&bin));
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(pico8::runs_directly(&bin));
+    assert!(!pico8::runs_directly(&d.path().join("missing")));
+}
+
+#[test]
+fn sdl_is_pointed_at_the_first_gles_and_egl_it_can_find() {
+    let d = TempDir::new().unwrap();
+    let own = d.path().join("own");
+    let lib32 = d.path().join("lib32");
+    std::fs::create_dir_all(&own).unwrap();
+    std::fs::create_dir_all(&lib32).unwrap();
+    std::fs::write(lib32.join("libGLESv2.so.2"), b"").unwrap();
+    std::fs::write(lib32.join("libEGL.so.1"), b"").unwrap();
+    std::fs::write(own.join("libEGL.so.1"), b"").unwrap();
+    let dirs = vec![own.clone(), lib32.clone()];
+    assert_eq!(
+        pico8::gl_drivers(&dirs),
+        vec![
+            ("SDL_VIDEO_GL_DRIVER", lib32.join("libGLESv2.so.2")),
+            ("SDL_VIDEO_EGL_DRIVER", own.join("libEGL.so.1")),
+        ]
+    );
+    assert!(pico8::gl_drivers(&[d.path().join("none")]).is_empty());
+}
+
+#[test]
 fn pico8_runs_through_its_loader_with_its_folders_on_the_card() {
     let root = Path::new("/mnt/sdcard");
     let line = pico8::command_line(
@@ -239,6 +289,7 @@ fn pico8_runs_through_its_loader_with_its_folders_on_the_card() {
         pico8::Arch::Armhf,
         &Launch::Splore,
         200,
+        false,
     );
     assert_eq!(line[0], "/lib/ld-linux-armhf.so.3");
     assert_eq!(line[1], "/mnt/sdcard/BIOS/PICO-8/pico8_dyn");
