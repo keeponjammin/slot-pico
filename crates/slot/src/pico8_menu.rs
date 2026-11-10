@@ -122,6 +122,16 @@ pub fn untint(rgba: &[u8], gain: [f32; 3]) -> Vec<u8> {
         .collect()
 }
 
+/// The first row of the buffer not on screen, when fb0's `all` rows hold two
+/// buffers of `rows` and the one on screen starts at row `front`: where the
+/// menu writes its next frame before showing it. `None` with one buffer.
+pub fn other_buffer(front: usize, rows: usize, all: usize) -> Option<usize> {
+    if rows == 0 || all < rows * 2 {
+        return None;
+    }
+    Some(if front >= rows { front - rows } else { front + rows })
+}
+
 /// RGBA as fb0's 32-bit little-endian XRGB, the other way from `frame_rgba`.
 pub fn to_xrgb(rgba: &[u8]) -> Vec<u8> {
     rgba.chunks_exact(4)
@@ -130,7 +140,7 @@ pub fn to_xrgb(rgba: &[u8]) -> Vec<u8> {
 }
 
 #[cfg(unix)]
-pub use screen::{grab, Overlay, Saved};
+pub use screen::{blank, grab, Overlay, Saved};
 
 #[cfg(unix)]
 mod screen {
@@ -141,36 +151,155 @@ mod screen {
     use slot_input::Millis;
     use slot_store::{Cart, Platform, SlotState};
     use slot_ui::{
-        footer_ink, icon_face, quick_label_face, quick_legend_faces, quick_pointer_face, Hud, Icon,
-        QuickMenu, QuickMenuFaces, QuickRow, SlotChrome, UndoFace, HINT_EDGE, HUD_ICON_PX, HUD_INK,
-        MOUTH_H, PLATE_H,
+        draw_corners, ease, footer_ink, icon_face, quick_label_face, quick_legend_faces,
+        quick_pointer_face, word_ink, Hud, Icon, Printed, QuickMenu, QuickMenuFaces, QuickRow,
+        SlotChrome, UndoFace, BOLT_PX, HINT_EDGE, HUD_ICON_PX, HUD_INK, MOUTH_H, PLATE_H,
     };
 
     use crate::panel_turn::{panel_turn, PanelTurn};
 
     const FB: &str = "/dev/fb0";
     const FB_SYS: &str = "/sys/class/graphics/fb0";
+    /// How long `Saved::settled` waits between copies, a refresh and a bit,
+    /// and how many times it looks before taking the last.
+    const SETTLE_GAP: std::time::Duration = std::time::Duration::from_millis(20);
+    const SETTLE_TRIES: usize = 5;
     const EVIOCGRAB: u64 = 0x4004_4590;
+    const FBIOGET_VSCREENINFO: u64 = 0x4600;
+    const FBIOPAN_DISPLAY: u64 = 0x4606;
+    /// How long the mouth takes to slide in or out: slot's footer slide.
+    const SLIDE_S: f32 = crate::app::POWER_ON_S;
 
-    /// All of fb0's memory as PICO-8 left it, both of its buffers included.
+    /// fb0 mapped into memory, every row of its buffers.
+    ///
+    /// Everything that reads or writes fb0 goes through this rather than
+    /// read(2) and write(2). On this display a write(2) to /dev/fb0 lands in
+    /// the CPU's cache while the display reads memory, so lines not yet
+    /// written back showed an older frame as 16-pixel dashes until they
+    /// were, a couple of seconds later. fb0's own mapping is write-combined:
+    /// what goes into it is what the display shows.
+    struct Mapped {
+        ptr: *mut u8,
+        len: usize,
+    }
+
+    impl Mapped {
+        fn open() -> Option<Mapped> {
+            let stride: usize = std::fs::read_to_string(format!("{FB_SYS}/stride"))
+                .ok()?
+                .trim()
+                .parse()
+                .ok()?;
+            let len = stride.checked_mul(virtual_rows()?)?;
+            if len == 0 {
+                return None;
+            }
+            let fb = std::fs::OpenOptions::new().read(true).write(true).open(FB).ok()?;
+            let ptr = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    len,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED,
+                    fb.as_raw_fd(),
+                    0,
+                )
+            };
+            if ptr == libc::MAP_FAILED {
+                eprintln!("slot: pico8: menu: could not map fb0");
+                return None;
+            }
+            Some(Mapped {
+                ptr: ptr.cast(),
+                len,
+            })
+        }
+
+        fn bytes(&self) -> &[u8] {
+            unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+        }
+
+        fn bytes_mut(&mut self) -> &mut [u8] {
+            unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
+        }
+    }
+
+    impl Drop for Mapped {
+        fn drop(&mut self) {
+            unsafe { libc::munmap(self.ptr.cast(), self.len) };
+        }
+    }
+
+    /// Clears every buffer of fb0 to black, so nothing of PICO-8 or the menu
+    /// is left on screen while slot starts again.
+    pub fn blank() {
+        match Mapped::open() {
+            Some(mut fb) => fb.bytes_mut().fill(0),
+            None => {
+                let len = (|| {
+                    let stride: usize = std::fs::read_to_string(format!("{FB_SYS}/stride"))
+                        .ok()?
+                        .trim()
+                        .parse()
+                        .ok()?;
+                    Some(stride * virtual_rows()?)
+                })();
+                let blanked = len.map(|len| {
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(FB)
+                        .and_then(|mut f| f.write_all(&vec![0u8; len]))
+                });
+                if let Some(Err(e)) = blanked {
+                    eprintln!("slot: pico8: could not blank the screen: {e}");
+                }
+            }
+        }
+    }
+
+    /// All of fb0's buffers as PICO-8 left them.
     pub struct Saved {
         bytes: Vec<u8>,
     }
 
     impl Saved {
         pub fn take() -> Option<Saved> {
-            std::fs::read(FB).ok().map(|bytes| Saved { bytes })
+            Mapped::open().map(|fb| Saved {
+                bytes: fb.bytes().to_vec(),
+            })
+        }
+
+        /// A copy of fb0 once it has stopped changing. Stopping PICO-8 does
+        /// not stop the GPU, which can still be drawing PICO-8's last frame
+        /// into its other buffer. A copy taken mid-frame and put back later
+        /// leaves stale tiles the GPU will not draw again, since it skips
+        /// tiles it believes it already wrote: they show as lines until the
+        /// game redraws there.
+        pub fn settled() -> Option<Saved> {
+            let mut last = Saved::take()?;
+            for tries in 0..SETTLE_TRIES {
+                std::thread::sleep(SETTLE_GAP);
+                let next = Saved::take()?;
+                if next.bytes == last.bytes {
+                    if tries > 0 {
+                        eprintln!("slot: pico8: menu: the screen settled after {} copies", tries + 2);
+                    }
+                    return Some(next);
+                }
+                last = next;
+            }
+            eprintln!("slot: pico8: menu: the screen kept changing, using the last copy");
+            Some(last)
         }
 
         /// Writes the copy back, so the screen is what PICO-8 believes it is.
         pub fn put_back(&self) {
-            let written = std::fs::OpenOptions::new()
-                .write(true)
-                .open(FB)
-                .and_then(|mut f| f.write_all(&self.bytes));
-            if let Err(e) = written {
-                eprintln!("slot: pico8: menu: could not put the screen back: {e}");
-            }
+            let Some(mut fb) = Mapped::open() else {
+                eprintln!("slot: pico8: menu: could not put the screen back");
+                return;
+            };
+            let n = fb.len.min(self.bytes.len());
+            fb.bytes_mut()[..n].copy_from_slice(&self.bytes[..n]);
         }
 
         /// The frame on screen, as RGBA, when fb0 is 32-bit.
@@ -192,23 +321,57 @@ mod screen {
         Some((stride, y0))
     }
 
-    /// Writes `rgba`, `w` by `h`, over the buffer on screen.
-    fn write_front(rgba: &[u8], w: u32, h: u32) -> bool {
-        use std::os::unix::fs::FileExt as _;
-        let Some((stride, y0)) = front_buffer() else {
+    /// How many rows fb0 has in all, its buffers stacked one under another.
+    fn virtual_rows() -> Option<usize> {
+        let text = std::fs::read_to_string(format!("{FB_SYS}/virtual_size")).ok()?;
+        text.trim().split(',').nth(1)?.parse().ok()
+    }
+
+    /// The first row of the buffer that is not on screen, when fb0 has two
+    /// buffers of `rows`: where the next frame is written before it is shown.
+    fn back_buffer(front: usize, rows: usize) -> Option<usize> {
+        super::other_buffer(front, rows, virtual_rows()?)
+    }
+
+    /// Puts the buffer starting at row `y0` on screen. The display changes
+    /// buffers between refreshes, so a frame is never shown half written.
+    fn pan_to(y0: usize) -> bool {
+        let Ok(fb) = std::fs::OpenOptions::new().read(true).write(true).open(FB) else {
             return false;
         };
-        let Ok(fb) = std::fs::OpenOptions::new().write(true).open(FB) else {
+        // struct fb_var_screeninfo: 40 words, yoffset the sixth.
+        let mut info = [0u32; 40];
+        let got = unsafe { libc::ioctl(fb.as_raw_fd(), FBIOGET_VSCREENINFO as _, info.as_mut_ptr()) };
+        if got != 0 {
+            return false;
+        }
+        info[4] = 0;
+        info[5] = y0 as u32;
+        unsafe { libc::ioctl(fb.as_raw_fd(), FBIOPAN_DISPLAY as _, info.as_ptr()) == 0 }
+    }
+
+    /// Writes `rgba`, `w` by `h`, into the buffer starting at row `y0`.
+    fn write_rows(rgba: &[u8], w: u32, h: u32, y0: usize) -> bool {
+        let Some((stride, _)) = front_buffer() else {
             return false;
         };
         let row_bytes = w as usize * 4;
         if row_bytes > stride || rgba.len() < row_bytes * h as usize {
             return false;
         }
+        let Some(mut fb) = Mapped::open() else {
+            return false;
+        };
+        if (y0 + h as usize) * stride > fb.len {
+            return false;
+        }
         let rows = super::to_xrgb(rgba);
-        rows.chunks_exact(row_bytes)
-            .enumerate()
-            .all(|(y, row)| fb.write_all_at(row, ((y0 + y) * stride) as u64).is_ok())
+        let mem = fb.bytes_mut();
+        for (y, row) in rows.chunks_exact(row_bytes).enumerate() {
+            let at = (y0 + y) * stride;
+            mem[at..at + row_bytes].copy_from_slice(row);
+        }
+        true
     }
 
     /// Takes the input devices for the menu while it is open, so the stopped
@@ -243,6 +406,20 @@ mod screen {
         /// so the compositor's grade puts it on once, as in slot.
         tint: [f32; 3],
         mouth: Option<Mouth>,
+        status: Option<Status>,
+        /// The first row of the buffer PICO-8 had on screen when it was
+        /// stopped. The menu draws into the other buffer and shows it, so
+        /// this one goes back on screen before PICO-8 carries on.
+        home: Option<usize>,
+    }
+
+    /// The battery and the clock in the top corners, as slot shows them over
+    /// any game while its menu is open.
+    struct Status {
+        battery: Option<slot_power::Battery>,
+        percent: (TexId, u32),
+        clock: (TexId, u32),
+        bolt: TexId,
     }
 
     impl Overlay {
@@ -282,6 +459,8 @@ mod screen {
                 show_backdrop: false,
                 tint: [1.0; 3],
                 mouth: None,
+                status: None,
+                home: None,
             })
         }
 
@@ -326,6 +505,7 @@ mod screen {
         /// Shows `saved` behind the menu. A turned panel's framebuffer is
         /// not the way up the menu is drawn, so it gets slot's plain ground.
         pub fn set_backdrop(&mut self, saved: &Saved) {
+            self.home = front_buffer().map(|(_, y0)| y0);
             let (w, h) = self.panel;
             let frame = match self.turned {
                 true => None,
@@ -390,8 +570,83 @@ mod screen {
             });
         }
 
+        /// The battery and the time for the top corners, in the ink slot
+        /// gives them over a game.
+        pub fn set_status(&mut self, battery: Option<slot_power::Battery>, clock: &str) {
+            let ink = footer_ink(false);
+            let c = &mut self.compositor;
+            let mut put = |face: UndoFace, old: Option<(TexId, u32)>| match old {
+                Some((tex, _)) => {
+                    c.update_texture(tex, face.w, face.h, &face.rgba);
+                    (tex, face.w)
+                }
+                None => (c.create_texture(face.w, face.h, &face.rgba), face.w),
+            };
+            let old = self.status.take();
+            let percent = battery.map_or_else(String::new, |b| format!("{}%", b.percent));
+            let percent = put(word_ink(&percent, ink), old.as_ref().map(|s| s.percent));
+            let clock = put(word_ink(clock, ink), old.as_ref().map(|s| s.clock));
+            let bolt = match old {
+                Some(s) => s.bolt,
+                None => {
+                    let f = icon_face(Icon::Charging, BOLT_PX, ink);
+                    c.create_texture(f.w, f.h, &f.rgba)
+                }
+            };
+            self.status = Some(Status {
+                battery,
+                percent,
+                clock,
+                bolt,
+            });
+        }
+
+        /// Opens the menu as slot does over a game: its rows over the
+        /// dimmed game at once, the mouth sliding up along the bottom.
+        pub fn show(&mut self, row: QuickRow, hidden: &[QuickRow]) {
+            self.slide(Some((row, hidden)), 0.0, 1.0);
+        }
+
+        /// The open menu, drawn again after a move.
         pub fn draw(&mut self, row: QuickRow, hidden: &[QuickRow]) {
+            self.frame(Some((row, hidden)), 1.0);
+        }
+
+        /// Closes the menu as slot does: the game back at once, the mouth
+        /// sliding down over it. The last frame is the game alone, as
+        /// PICO-8 left it, so putting its buffers back changes nothing seen.
+        pub fn hide(&mut self) {
+            self.slide(None, 1.0, 0.0);
+        }
+
+        /// Puts PICO-8's own buffer back on screen, after the menu showed
+        /// the other one. Called once fb0 holds PICO-8's frames again.
+        pub fn restore(&mut self) {
+            let Some(home) = self.home.take() else {
+                return;
+            };
+            if front_buffer().is_some_and(|(_, y0)| y0 != home) && !pan_to(home) {
+                eprintln!("slot: pico8: menu: could not put PICO-8's buffer back on screen");
+            }
+        }
+
+        fn slide(&mut self, menu: Option<(QuickRow, &[QuickRow])>, from: f32, to: f32) {
+            let began = std::time::Instant::now();
+            loop {
+                let k = (began.elapsed().as_secs_f32() / SLIDE_S).min(1.0);
+                self.frame(menu, from + (to - from) * k);
+                if k >= 1.0 {
+                    return;
+                }
+            }
+        }
+
+        /// One frame: the game, the menu's rows when it is open, and the
+        /// mouth with the cart and the legends `footer` of the way up, as
+        /// slot draws its menu over any game.
+        fn frame(&mut self, menu: Option<(QuickRow, &[QuickRow])>, footer: f32) {
             let canvas = Canvas::of(self.window);
+            let dy = (1.0 - ease(footer.clamp(0.0, 1.0))) * MOUTH_H;
             let mut out = Vec::new();
             if let (true, Some((tex, _, _))) = (self.show_backdrop, self.backdrop) {
                 out.push(Draw::Tex {
@@ -403,84 +658,102 @@ mod screen {
                     alpha: 1.0,
                 });
             }
-            QuickMenu {
-                row,
-                hidden,
-                values: [None; QuickRow::ALL.len()],
-                clock: None,
-                wallpaper: None,
-                networks: None,
-                romm: [None; 4],
-                kid_shelf: None,
-                faces: Some(&self.faces),
-                ground: None,
-                palette: None,
-                gba_bezel: None,
-                gb_bezel: None,
-                gbc_bezel: None,
-                bezel: None,
-                gba_overlay: None,
-                gb_overlay: None,
-                gbc_overlay: None,
-                overlay: None,
-                bound: None,
-                description: None,
-                over_game: self.show_backdrop,
-                // With the cart seated, the menu's shade stops where the mouth begins, as in slot.
-                footer_top: match self.mouth {
-                    Some(_) => canvas.h - MOUTH_H,
-                    None => canvas.h,
-                },
-                canvas,
-            }
-            .draw(&mut out);
-            if let Some(m) = &self.mouth {
-                SlotChrome {
-                    cart: &m.cart,
-                    face: Some(m.face),
-                    rest: 0.0,
-                    scale: 1.0,
-                    seat: 1.0,
-                    alert: None,
-                    dim: 0.0,
-                    screen: 0.0,
-                    game: false,
-                    over: true,
-                    behind: m.behind,
-                    slot: Some(m.slot),
+            if let Some((row, hidden)) = menu {
+                QuickMenu {
+                    row,
+                    hidden,
+                    values: [None; QuickRow::ALL.len()],
+                    clock: None,
+                    wallpaper: None,
+                    networks: None,
+                    romm: [None; 4],
+                    kid_shelf: None,
+                    faces: Some(&self.faces),
+                    ground: None,
+                    palette: None,
+                    gba_bezel: None,
+                    gb_bezel: None,
+                    gbc_bezel: None,
+                    bezel: None,
+                    gba_overlay: None,
+                    gb_overlay: None,
+                    gbc_overlay: None,
+                    overlay: None,
+                    bound: None,
+                    description: None,
+                    over_game: self.show_backdrop,
+                    // The menu's shade stops where the mouth begins, as in slot.
+                    footer_top: canvas.h - MOUTH_H + dy,
                     canvas,
                 }
                 .draw(&mut out);
+                if let Some(s) = &self.status {
+                    draw_corners(
+                        canvas,
+                        s.battery,
+                        Printed::new(s.percent.0, s.percent.1),
+                        Some(s.bolt),
+                        Printed::new(s.clock.0, s.clock.1),
+                        &mut out,
+                    );
+                }
             }
-            let [_, _, open, resume, ..] = self.faces.legend;
-            let y = canvas.h - MOUTH_H;
-            for (face, right) in [(resume, false), (open, true)] {
-                let seen = face.1.saturating_sub(HINT_EDGE) as f32;
-                let x = if right {
-                    (canvas.w - seen).round()
-                } else {
-                    0.0
-                };
-                out.push(Draw::Tex {
-                    x,
-                    y,
-                    w: face.1 as f32,
-                    h: MOUTH_H,
-                    tex: face.0,
-                    alpha: 1.0,
-                });
+            if footer > 0.0 {
+                let start = out.len();
+                if let Some(m) = &self.mouth {
+                    SlotChrome {
+                        cart: &m.cart,
+                        face: Some(m.face),
+                        rest: 0.0,
+                        scale: 1.0,
+                        seat: 1.0,
+                        alert: None,
+                        dim: 0.0,
+                        screen: 0.0,
+                        game: false,
+                        over: true,
+                        behind: m.behind,
+                        slot: Some(m.slot),
+                        canvas,
+                    }
+                    .draw(&mut out);
+                }
+                let [_, _, open, resume, ..] = self.faces.legend;
+                let y = canvas.h - MOUTH_H;
+                for (face, right) in [(resume, false), (open, true)] {
+                    let seen = face.1.saturating_sub(HINT_EDGE) as f32;
+                    let x = if right {
+                        (canvas.w - seen).round()
+                    } else {
+                        0.0
+                    };
+                    out.push(Draw::Tex {
+                        x,
+                        y,
+                        w: face.1 as f32,
+                        h: MOUTH_H,
+                        tex: face.0,
+                        alpha: 1.0,
+                    });
+                }
+                crate::app::shift_down(&mut out[start..], dy);
             }
+            self.present(&out);
+        }
+
+        fn present(&mut self, out: &[Draw]) {
             self.compositor.fit(self.window);
             self.compositor.begin_frame();
-            self.compositor.draw_list(&out);
-            // The frame goes straight into the buffer on screen rather than
-            // through a swap: the GPU skips writing tiles that match what it
-            // last drew into a buffer, and PICO-8 and the copy put back have
-            // drawn there since, so swapped frames came out with holes.
+            self.compositor.draw_list(out);
+            // The frame goes into fb0 by hand rather than through a swap: the
+            // GPU skips writing tiles that match what it last drew into a
+            // buffer, and PICO-8 and the copy put back have drawn there since,
+            // so swapped frames came out with holes. It is written into the
+            // buffer not on screen and then shown, so it never tears.
             if !self.turned {
                 let (w, h) = self.panel;
                 let frame = self.compositor.read_window(self.panel);
-                if write_front(&frame, w, h) {
+                if self.flip(&frame, w, h) {
                     return;
                 }
             }
@@ -488,6 +761,21 @@ mod screen {
             if let Err(e) = self.surface.swap() {
                 eprintln!("slot: pico8: menu: {e}");
             }
+        }
+
+        /// Writes a frame into the buffer not on screen and shows it. With
+        /// one buffer, or if the display will not change buffers, it goes
+        /// over the buffer on screen instead.
+        fn flip(&mut self, rgba: &[u8], w: u32, h: u32) -> bool {
+            let Some((_, front)) = front_buffer() else {
+                return false;
+            };
+            if let Some(back) = back_buffer(front, h as usize) {
+                if write_rows(rgba, w, h, back) && pan_to(back) {
+                    return true;
+                }
+            }
+            write_rows(rgba, w, h, front)
         }
 
         /// slot's blue light and dim, which its compositor puts on every

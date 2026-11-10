@@ -946,6 +946,9 @@ mod runner {
                     for f in &files {
                         grab(f, false);
                     }
+                    if let Some(o) = overlay.as_mut() {
+                        o.restore();
+                    }
                 }
                 if unsaved.is_some() {
                     save_state(root, state);
@@ -1041,7 +1044,7 @@ mod runner {
                     Step::Open => {
                         stop(sleep.pid);
                         sleep.held = true;
-                        saved = Saved::take();
+                        saved = Saved::settled();
                         if overlay.is_none() {
                             match Overlay::open() {
                                 Ok(o) => overlay = Some(o),
@@ -1063,8 +1066,9 @@ mod runner {
                         o.set_grade(state.blue_light, state.dim);
                         o.set_backdrop(s);
                         o.seat(root, state);
+                        o.set_status(platform.battery(), &clock_text(state));
                         if let Some(row) = menu.row() {
-                            o.draw(row, &hidden);
+                            o.show(row, &hidden);
                         }
                     }
                     Step::Moved => {
@@ -1074,11 +1078,15 @@ mod runner {
                     }
                     Step::Resume => {
                         eprintln!("slot: pico8: menu: resume");
-                        if let Some(o) = &overlay {
+                        if let Some(o) = overlay.as_mut() {
+                            o.hide();
                             o.settle();
                         }
                         if let Some(s) = saved.take() {
                             s.put_back();
+                        }
+                        if let Some(o) = overlay.as_mut() {
+                            o.restore();
                         }
                         for f in &files {
                             grab(f, false);
@@ -1091,6 +1099,9 @@ mod runner {
                         eprintln!("slot: pico8: back to slot");
                         for f in &files {
                             grab(f, false);
+                        }
+                        if let Some(o) = overlay.as_mut() {
+                            o.restore();
                         }
                         unsafe {
                             libc::kill(sleep.pid, libc::SIGTERM);
@@ -1106,6 +1117,14 @@ mod runner {
                 update_hud(&mut hud, &mut hud_drawn, &mut overlay, s, now);
             }
         }
+    }
+
+    /// The time for the menu's corner, in the zone and format slot shows it.
+    fn clock_text(state: &slot_store::SlotState) -> String {
+        let utc = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        slot_ui::time_text(state.zone.local(utc), state.clock_24h)
     }
 
     const HUD_FILE: &str = "/dev/shm/slot-pico8-hud";
@@ -1163,29 +1182,7 @@ mod runner {
     /// from black. Called again once PICO-8 is gone, in case it drew while
     /// quitting.
     fn blank_screen() {
-        use std::io::Write as _;
-        let sys =
-            |name: &str| std::fs::read_to_string(format!("/sys/class/graphics/fb0/{name}")).ok();
-        let len = (|| {
-            let stride: usize = sys("stride")?.trim().parse().ok()?;
-            let rows: usize = sys("virtual_size")?
-                .trim()
-                .split(',')
-                .nth(1)?
-                .parse()
-                .ok()?;
-            Some(stride * rows)
-        })();
-        let Some(len) = len else {
-            return;
-        };
-        let blanked = std::fs::OpenOptions::new()
-            .write(true)
-            .open("/dev/fb0")
-            .and_then(|mut fb| fb.write_all(&vec![0u8; len]));
-        if let Err(e) = blanked {
-            eprintln!("slot: pico8: could not blank the screen: {e}");
-        }
+        crate::pico8_menu::blank();
     }
 
     /// Stops PICO-8 and waits, briefly, until it has: its last frame must be

@@ -133,3 +133,17 @@ fn the_shims_tint_comes_off_within_a_level() {
         [9, 9, 9, 255]
     );
 }
+
+#[test]
+fn the_menu_draws_into_the_buffer_not_on_screen() {
+    use slot::pico8_menu::other_buffer;
+    // The RG34XXSP's fb0: two 480-row buffers, one over the other.
+    assert_eq!(other_buffer(0, 480, 960), Some(480));
+    assert_eq!(other_buffer(480, 480, 960), Some(0));
+    assert_eq!(
+        other_buffer(0, 480, 480),
+        None,
+        "with one buffer the menu has nowhere else to draw"
+    );
+    assert_eq!(other_buffer(0, 0, 960), None);
+}
