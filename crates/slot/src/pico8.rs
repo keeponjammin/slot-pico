@@ -1059,6 +1059,7 @@ mod runner {
                             grab(f, true);
                         }
                         gestures.set_context(Context::Menu);
+                        o.set_grade(state.blue_light, state.dim);
                         o.set_backdrop(s);
                         if let Some(row) = menu.row() {
                             o.draw(row, &hidden);

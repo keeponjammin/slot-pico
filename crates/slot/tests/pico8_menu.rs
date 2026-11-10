@@ -101,3 +101,35 @@ fn the_frame_is_read_from_the_panned_buffer_as_rgba() {
     assert_eq!(frame_rgba(&fb, stride, 3, w, h), None);
     assert_eq!(frame_rgba(&fb, 4, 0, w, h), None);
 }
+
+#[test]
+fn a_frame_goes_back_into_fb0_as_it_came_out() {
+    let rgba = [10u8, 20, 30, 255, 200, 100, 0, 255];
+    let xrgb = slot::pico8_menu::to_xrgb(&rgba);
+    assert_eq!(xrgb, [30, 20, 10, 255, 0, 100, 200, 255]);
+    assert_eq!(frame_rgba(&xrgb, 8, 0, 2, 1).unwrap(), rgba);
+}
+
+#[test]
+fn the_shims_tint_comes_off_within_a_level() {
+    let gain = slot_gfx::blue_light_gain(slot_store::BLUE_LIGHT_MAX);
+    let factor = gain.map(|g| (g * 255.0).round() as u32);
+    for c in [0u8, 1, 37, 128, 200, 255] {
+        let tinted: Vec<u8> = (0..3)
+            .map(|i| ((u32::from(c) * factor[i] + 127) / 255) as u8)
+            .chain([255])
+            .collect();
+        let back = slot::pico8_menu::untint(&tinted, gain);
+        for i in 0..3 {
+            assert!(
+                (i32::from(back[i]) - i32::from(c)).abs() <= 2,
+                "channel {i}: {c} came back as {}",
+                back[i]
+            );
+        }
+    }
+    assert_eq!(
+        slot::pico8_menu::untint(&[9, 9, 9, 255], [1.0; 3]),
+        [9, 9, 9, 255]
+    );
+}

@@ -107,6 +107,28 @@ pub fn frame_rgba(fb: &[u8], stride: usize, y0: usize, w: u32, h: u32) -> Option
     Some(rgba)
 }
 
+/// Takes `gain` back off RGBA that the shim tinted with it. The shim hands
+/// SDL the gain as an 8-bit factor, so this divides by the same factor.
+pub fn untint(rgba: &[u8], gain: [f32; 3]) -> Vec<u8> {
+    let factor = gain.map(|g| (g.clamp(0.0, 1.0) * 255.0).round());
+    rgba.chunks_exact(4)
+        .flat_map(|p| {
+            let back = |c: usize| match factor[c] {
+                f if f <= 0.0 => 0,
+                f => (f32::from(p[c]) * 255.0 / f).round().min(255.0) as u8,
+            };
+            [back(0), back(1), back(2), p[3]]
+        })
+        .collect()
+}
+
+/// RGBA as fb0's 32-bit little-endian XRGB, the other way from `frame_rgba`.
+pub fn to_xrgb(rgba: &[u8]) -> Vec<u8> {
+    rgba.chunks_exact(4)
+        .flat_map(|p| [p[2], p[1], p[0], 0xff])
+        .collect()
+}
+
 #[cfg(unix)]
 pub use screen::{grab, Overlay, Saved};
 
@@ -152,14 +174,40 @@ mod screen {
 
         /// The frame on screen, as RGBA, when fb0 is 32-bit.
         fn front(&self, w: u32, h: u32) -> Option<Vec<u8>> {
-            let sys = |name: &str| std::fs::read_to_string(format!("{FB_SYS}/{name}")).ok();
-            if sys("bits_per_pixel")?.trim() != "32" {
-                return None;
-            }
-            let stride = sys("stride")?.trim().parse().ok()?;
-            let y0 = sys("pan")?.trim().split(',').nth(1)?.parse().ok()?;
+            let (stride, y0) = front_buffer()?;
             super::frame_rgba(&self.bytes, stride, y0, w, h)
         }
+    }
+
+    /// fb0's row stride, and the first row of the buffer on screen, when it
+    /// is 32-bit.
+    fn front_buffer() -> Option<(usize, usize)> {
+        let sys = |name: &str| std::fs::read_to_string(format!("{FB_SYS}/{name}")).ok();
+        if sys("bits_per_pixel")?.trim() != "32" {
+            return None;
+        }
+        let stride = sys("stride")?.trim().parse().ok()?;
+        let y0 = sys("pan")?.trim().split(',').nth(1)?.parse().ok()?;
+        Some((stride, y0))
+    }
+
+    /// Writes `rgba`, `w` by `h`, over the buffer on screen.
+    fn write_front(rgba: &[u8], w: u32, h: u32) -> bool {
+        use std::os::unix::fs::FileExt as _;
+        let Some((stride, y0)) = front_buffer() else {
+            return false;
+        };
+        let Ok(fb) = std::fs::OpenOptions::new().write(true).open(FB) else {
+            return false;
+        };
+        let row_bytes = w as usize * 4;
+        if row_bytes > stride || rgba.len() < row_bytes * h as usize {
+            return false;
+        }
+        let rows = super::to_xrgb(rgba);
+        rows.chunks_exact(row_bytes)
+            .enumerate()
+            .all(|(y, row)| fb.write_all_at(row, ((y0 + y) * stride) as u64).is_ok())
     }
 
     /// Takes the input devices for the menu while it is open, so the stopped
@@ -181,6 +229,9 @@ mod screen {
         icons: Vec<TexId>,
         backdrop: Option<(TexId, u32, u32)>,
         show_backdrop: bool,
+        /// The tint the shim gave PICO-8's frames, taken off the backdrop
+        /// so the compositor's grade puts it on once, as in slot.
+        tint: [f32; 3],
     }
 
     impl Overlay {
@@ -218,6 +269,7 @@ mod screen {
                 icons,
                 backdrop: None,
                 show_backdrop: false,
+                tint: [1.0; 3],
             })
         }
 
@@ -265,7 +317,7 @@ mod screen {
             let (w, h) = self.panel;
             let frame = match self.turned {
                 true => None,
-                false => saved.front(w, h),
+                false => saved.front(w, h).map(|f| super::untint(&f, self.tint)),
             };
             self.show_backdrop = frame.is_some();
             let Some(rgba) = frame else {
@@ -343,10 +395,30 @@ mod screen {
             self.compositor.fit(self.window);
             self.compositor.begin_frame();
             self.compositor.draw_list(&out);
+            // The frame goes straight into the buffer on screen rather than
+            // through a swap: the GPU skips writing tiles that match what it
+            // last drew into a buffer, and PICO-8 and the copy put back have
+            // drawn there since, so swapped frames came out with holes.
+            if !self.turned {
+                let (w, h) = self.panel;
+                let frame = self.compositor.read_window(self.panel);
+                if write_front(&frame, w, h) {
+                    return;
+                }
+            }
             self.compositor.end_frame(self.window);
             if let Err(e) = self.surface.swap() {
                 eprintln!("slot: pico8: menu: {e}");
             }
+        }
+
+        /// slot's blue light and dim, which its compositor puts on every
+        /// frame, the menu's included.
+        pub fn set_grade(&mut self, blue_light: u8, dim: u8) {
+            self.compositor.set_blue_light(blue_light);
+            self.compositor.set_dim(dim);
+            let dim = slot_gfx::dim_gain(dim);
+            self.tint = slot_gfx::blue_light_gain(blue_light).map(|g| g * dim);
         }
 
         /// Waits until the last menu frame is on the screen, before the
