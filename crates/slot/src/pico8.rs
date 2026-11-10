@@ -132,8 +132,250 @@ pub fn stock_shelf(root: &Path) {
             false => eprintln!("slot: pico8: could not write {}", cart.display()),
         }
     }
+    shelve_favourites(root, |_| Fetched::Offline);
     write_labels(root);
 }
+
+/// The core a cart plays on: the one chosen for it, except that a cart set to
+/// the owner's PICO-8 plays on fake-08 while there is no PICO-8 on the card.
+pub fn usable(root: &Path, core: slot_store::Core) -> slot_store::Core {
+    match core == slot_store::Core::Pico8 && !installed(root) {
+        true => slot_store::Core::Fake08,
+        false => core,
+    }
+}
+
+/// The shelf as it can be played: without PICO-8 on the card the Splore card
+/// is left off, though its file stays, so it is back once PICO-8 is.
+pub fn playable(root: &Path, mut carts: Vec<slot_store::Cart>) -> Vec<slot_store::Cart> {
+    if carts.iter().any(|c| is_splore(&c.rom)) && !installed(root) {
+        carts.retain(|c| !is_splore(&c.rom));
+    }
+    carts
+}
+
+/// Where PICO-8 lists the carts favourited in Splore, in its home.
+const FAVOURITES: &str = "favourites.txt";
+/// The favourites slot has put on the shelf, one id a line, so each goes on
+/// once and one taken off the shelf stays off.
+const SHELVED: &str = "Config/pico8_favourites.txt";
+
+/// A cart favourited in Splore.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Favourite {
+    /// The BBS cart id with its revision, as in `celeste_classic-2` or `15133`.
+    pub id: String,
+    pub title: String,
+}
+
+/// Reads PICO-8's `favourites.txt`: one cart a line, fields between `|`, the
+/// cart id second and its title seventh. A cart PICO-8 took for a local one
+/// has no id, only its path in `bbs`, which names it just as well.
+pub fn parse_favourites(text: &str) -> Vec<Favourite> {
+    let mut out: Vec<Favourite> = Vec::new();
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split('|').map(str::trim).collect();
+        if fields.len() < 7 {
+            continue;
+        }
+        let id = match fields[1] {
+            "" => Path::new(fields[5])
+                .starts_with("bbs")
+                .then(|| cart_stem(Path::new(fields[5])))
+                .flatten()
+                .unwrap_or_default(),
+            id => id.to_string(),
+        };
+        if !is_bbs_id(&id) || out.iter().any(|f| f.id == id) {
+            continue;
+        }
+        let title = match fields[6] {
+            "" => id.clone(),
+            t => t.to_string(),
+        };
+        out.push(Favourite { id, title });
+    }
+    out
+}
+
+/// BBS ids are letters, digits, `_` and `-`: nothing that reaches outside a
+/// folder or a URL path.
+fn is_bbs_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Splore's own copy of a cart it has run: `bbs/carts/<id>.p8.png`, or, for
+/// carts with a number for an id, `bbs/<n>/<id>.p8.png`.
+pub fn bbs_cart(home: &Path, id: &str) -> Option<PathBuf> {
+    let name = format!("{id}.p8.png");
+    let bbs = home.join("bbs");
+    let mut dirs = vec![bbs.join("carts")];
+    if let Ok(entries) = std::fs::read_dir(&bbs) {
+        let mut more: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.is_dir() && !p.ends_with("carts"))
+            .collect();
+        more.sort();
+        dirs.extend(more);
+    }
+    dirs.into_iter().map(|d| d.join(&name)).find(|p| p.is_file())
+}
+
+/// Where the BBS keeps a cart: under the first character of a numbered id,
+/// the first two of any other.
+pub fn bbs_url(id: &str) -> Option<String> {
+    if !is_bbs_id(id) || id.len() < 2 {
+        return None;
+    }
+    let numbered = id.as_bytes()[..2].iter().all(u8::is_ascii_digit);
+    let folder = &id[..if numbered { 1 } else { 2 }];
+    Some(format!(
+        "https://www.lexaloffle.com/bbs/cposts/{folder}/{id}.p8.png"
+    ))
+}
+
+/// What became of asking the BBS for a cart.
+pub enum Fetched {
+    Cart(Vec<u8>),
+    /// The BBS answered, without the cart.
+    Missing,
+    /// No answer: asking for more now would only wait as long again.
+    Offline,
+}
+
+/// The name a favourite gets on the shelf: its title in capitals where words
+/// start, as Splore shows it, without what a FAT card cannot name a file.
+pub fn shelf_name(title: &str, id: &str) -> String {
+    let mut out = String::new();
+    let mut start = true;
+    for c in title.chars() {
+        if c.is_control() || "<>:\"/\\|?*".contains(c) {
+            continue;
+        }
+        match start {
+            true => out.extend(c.to_uppercase()),
+            false => out.push(c),
+        }
+        start = c.is_whitespace();
+    }
+    let words: Vec<&str> = out.split_whitespace().collect();
+    let mut name: String = words.join(" ");
+    if name.chars().count() > 60 {
+        name = name.chars().take(60).collect::<String>().trim_end().to_string();
+    }
+    let name = name.trim_end_matches(['.', ' ']).to_string();
+    match name.is_empty() || name.starts_with('.') || is_splore(Path::new(&format!("{name}.p8"))) {
+        true => id.to_string(),
+        false => name,
+    }
+}
+
+/// Puts every cart favourited in Splore on the PICO-8 shelf, once each, as a
+/// `.p8.png` under its title. The cart is Splore's own copy when it has one,
+/// or whatever `fetch` gets from the BBS. Returns how many went on; their
+/// labels are drawn with the others' at the next boot.
+pub fn shelve_favourites(root: &Path, mut fetch: impl FnMut(&str) -> Fetched) -> usize {
+    let home = home_dir(root);
+    let Ok(text) = std::fs::read_to_string(home.join(FAVOURITES)) else {
+        return 0;
+    };
+    let record = root.join(SHELVED);
+    let mut shelved: Vec<String> = std::fs::read_to_string(&record)
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    let mut offline = false;
+    let mut added = 0;
+    for fav in parse_favourites(&text) {
+        if shelved.contains(&fav.id) {
+            continue;
+        }
+        let bytes = match bbs_cart(&home, &fav.id).and_then(|p| std::fs::read(p).ok()) {
+            Some(bytes) => bytes,
+            None if offline => continue,
+            None => match fetch(&fav.id) {
+                Fetched::Cart(bytes) => bytes,
+                Fetched::Missing => {
+                    eprintln!("slot: pico8: {} is not on the BBS", fav.id);
+                    continue;
+                }
+                Fetched::Offline => {
+                    offline = true;
+                    continue;
+                }
+            },
+        };
+        if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            eprintln!("slot: pico8: {} is not a cart", fav.id);
+            continue;
+        }
+        let dir = carts_dir(root);
+        let name = shelf_name(&fav.title, &fav.id);
+        let cart = [name.clone(), format!("{name} ({})", fav.id)]
+            .into_iter()
+            .map(|n| dir.join(format!("{n}.p8.png")))
+            .find(|p| !p.exists() || std::fs::read(p).is_ok_and(|b| b == bytes));
+        let Some(cart) = cart else {
+            eprintln!("slot: pico8: no free name for {}", fav.id);
+            continue;
+        };
+        let _ = std::fs::create_dir_all(&dir);
+        if let Err(e) = slot_store::atomic_write(&cart, &bytes) {
+            eprintln!("slot: pico8: {}: {e}", cart.display());
+            continue;
+        }
+        eprintln!("slot: pico8: favourite {} on the shelf as {}", fav.id, cart.display());
+        shelved.push(fav.id);
+        added += 1;
+        let _ = std::fs::create_dir_all(root.join("Config"));
+        let text = shelved.join("\n") + "\n";
+        if let Err(e) = slot_store::atomic_write(&record, text.as_bytes()) {
+            eprintln!("slot: pico8: {}: {e}", record.display());
+        }
+    }
+    added
+}
+
+/// Asks the BBS for a cart.
+pub fn fetch_bbs(agent: &ureq::Agent, id: &str) -> Fetched {
+    let Some(url) = bbs_url(id) else {
+        return Fetched::Missing;
+    };
+    let response = match agent.get(&url).call() {
+        Ok(r) => r,
+        Err(ureq::Error::StatusCode(code)) => {
+            eprintln!("slot: pico8: {url}: {code}");
+            return Fetched::Missing;
+        }
+        Err(e) => {
+            eprintln!("slot: pico8: {url}: {e}");
+            return Fetched::Offline;
+        }
+    };
+    let mut bytes = Vec::new();
+    match response
+        .into_body()
+        .into_with_config()
+        .limit(BBS_CART_LIMIT)
+        .reader()
+        .read_to_end(&mut bytes)
+    {
+        Ok(_) => Fetched::Cart(bytes),
+        Err(e) => {
+            eprintln!("slot: pico8: {url}: {e}");
+            Fetched::Offline
+        }
+    }
+}
+
+/// A `.p8.png` is 160x205 pixels; nothing honest is near this size.
+const BBS_CART_LIMIT: u64 = 1 << 20;
 
 pub fn install_dir(root: &Path) -> PathBuf {
     crate::root::bios_dir(root).join(INSTALL_DIR)
@@ -725,6 +967,8 @@ mod runner {
     const DEV: &str = "/dev/input";
     const SYS: &str = "/sys/class/input";
     const QUIT_GRACE: Duration = Duration::from_secs(3);
+    /// How long one cart may take to come from the BBS.
+    const BBS_TIMEOUT: Duration = Duration::from_secs(15);
 
     /// `slot --pico8`: runs what slot asked for in `$SLOT_RUN/slot.next`.
     pub fn run(root: &Path, run: &Path) -> i32 {
@@ -838,6 +1082,15 @@ mod runner {
             seated,
         );
         platform.set_backlight(state.brightness + 1);
+        // Carts favourited in Splore go on the shelf while the network is
+        // still up for the ones Splore never downloaded.
+        if launch == Launch::Splore {
+            let agent = crate::update::agent(BBS_TIMEOUT);
+            let added = shelve_favourites(root, |id| fetch_bbs(&agent, id));
+            if added > 0 {
+                eprintln!("slot: pico8: {added} favourite(s) put on the shelf");
+            }
+        }
         wifi.down(root);
         eprintln!("slot: pico8: exited {code}");
         0

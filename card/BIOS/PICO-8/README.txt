@@ -10,4 +10,5 @@ slot does not come with PICO-8. Buy it from Lexaloffle
 3. Put .p8 and .p8.png carts in Games/PICO8.
 
 After a restart the PICO-8 shelf has a Splore cart for browsing the BBS.
+Carts you favourite in Splore are put on the PICO-8 shelf when you leave.
 In PICO-8, MENU goes back to slot and POWER turns the screen off.

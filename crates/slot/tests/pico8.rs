@@ -589,8 +589,10 @@ fn ejecting_a_pico8_cart_while_it_goes_in_keeps_slot_running() {
 }
 
 #[test]
-fn a_cart_set_to_pico8_is_refused_until_pico8_is_installed() {
+fn a_cart_set_to_pico8_plays_on_fake08_while_pico8_is_not_on_the_card() {
     let d = TempDir::new().unwrap();
+    let run = d.path().join("run");
+    let _turn = hand_off_through(&run);
     write_cart(d.path(), "celeste.p8", b"");
     on_pico8(d.path(), "celeste");
     slot::root::ensure(d.path());
@@ -600,8 +602,104 @@ fn a_cart_set_to_pico8_is_refused_until_pico8_is_installed() {
     let mut a = App::boot(d.path());
     to_pico8_shelf(&mut a);
     common::through(&mut a, Btn::A);
-    assert!(!a.relaunching());
-    assert!(matches!(a.phase(), Phase::Shelf), "{:?}", a.phase());
+    assert!(
+        matches!(a.phase(), Phase::Inserting { cart, .. } if cart == "celeste"),
+        "{:?}",
+        a.phase()
+    );
+    for _ in 0..120 {
+        a.update(1.0 / 60.0);
+        assert!(!a.relaunching(), "handed to a PICO-8 that is not there");
+    }
+    assert!(!a.seated_outside());
+    assert!(!run.join(pico8::NEXT_FILE).exists());
+}
+
+#[test]
+fn without_pico8_its_chip_cannot_be_seated() {
+    let d = TempDir::new().unwrap();
+    write_cart(d.path(), "celeste.p8", b"");
+    on_pico8(d.path(), "celeste");
+    slot::root::ensure(d.path());
+    std::fs::write(d.path().join("Games/GBA/Emerald.gba"), [0u8; 512]).unwrap();
+    common::clocked(d.path());
+    let mut a = App::boot(d.path());
+    to_pico8_shelf(&mut a);
+    open_board(&mut a);
+    assert_eq!(
+        a.core_picker(),
+        Some(Core::Fake08),
+        "the board opens on the core the cart can play on"
+    );
+    a.apply(slot_input::Action::GbaDown(Btn::Right));
+    a.update(1.0 / 60.0);
+    assert_ne!(
+        a.core_picker_chip().map(|c| c.shake),
+        Some(0.0),
+        "moving to PICO-8 did not shake"
+    );
+    for _ in 0..30 {
+        a.update(1.0 / 60.0);
+    }
+    assert_eq!(a.core_picker(), Some(Core::Fake08), "PICO-8 was seated");
+}
+
+#[test]
+fn with_pico8_its_chip_can_be_seated() {
+    let d = TempDir::new().unwrap();
+    install(d.path());
+    write_cart(d.path(), "celeste.p8", b"");
+    slot::root::ensure(d.path());
+    std::fs::write(d.path().join("Games/GBA/Emerald.gba"), [0u8; 512]).unwrap();
+    common::clocked(d.path());
+    let mut a = App::boot(d.path());
+    to_pico8_shelf(&mut a);
+    assert_eq!(a.selected_stem(), Some("celeste"));
+    open_board(&mut a);
+    a.apply(slot_input::Action::GbaDown(Btn::Right));
+    assert_eq!(a.core_picker(), Some(Core::Pico8));
+}
+
+/// Opens the core board and waits out its faces, which no renderer draws here.
+fn open_board(a: &mut App) {
+    a.apply(slot_input::Action::GbaDown(Btn::Start));
+    for _ in 0..120 {
+        a.update(1.0 / 60.0);
+    }
+}
+
+#[test]
+fn splore_leaves_the_shelf_with_pico8_and_comes_back_with_it() {
+    let d = TempDir::new().unwrap();
+    install(d.path());
+    write_cart(d.path(), "celeste.p8", b"");
+    slot::root::ensure(d.path());
+    std::fs::write(d.path().join("Games/GBA/Emerald.gba"), [0u8; 512]).unwrap();
+    common::clocked(d.path());
+    let stems = |a: &App| -> Vec<String> {
+        a.carts()
+            .filter(|c| c.platform == Platform::Pico8)
+            .map(|c| c.stem.clone())
+            .collect()
+    };
+    let a = App::boot(d.path());
+    assert_eq!(stems(&a), ["celeste", pico8::SPLORE]);
+
+    std::fs::remove_dir_all(pico8::install_dir(d.path())).unwrap();
+    let a = App::boot(d.path());
+    assert_eq!(
+        stems(&a),
+        ["celeste"],
+        "Splore with no PICO-8 to open it, or the carts gone with it"
+    );
+    assert!(
+        pico8::carts_dir(d.path()).join("Splore.p8").is_file(),
+        "the Splore card was deleted, not left off"
+    );
+
+    install(d.path());
+    let a = App::boot(d.path());
+    assert_eq!(stems(&a), ["celeste", pico8::SPLORE]);
 }
 
 #[test]
@@ -835,4 +933,133 @@ fn pico8s_buttons_go_by_its_own_names_in_the_in_game_menu() {
     assert!(drawn(dim(own + 2)), "Start is not called Pause on PICO-8");
     assert!(!drawn(lit(QuickRow::GameA.index())), "A still goes by the Game Boy's name");
     assert!(!drawn(dim(QuickRow::GameSelect.index())), "PICO-8 has no select");
+}
+
+fn favourites(root: &Path, text: &str) {
+    let home = pico8::home_dir(root);
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("favourites.txt"), text).unwrap();
+}
+
+fn bbs_cart(root: &Path, dir: &str, id: &str, bytes: &[u8]) {
+    let dir = pico8::home_dir(root).join("bbs").join(dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(format!("{id}.p8.png")), bytes).unwrap();
+}
+
+/// Lines as PICO-8 writes them: a BBS cart, a numbered one, one PICO-8 took
+/// for a local cart, and one no BBS id could be.
+const FAVOURITES: &str = "\
+|kalikan_menu-6        |kalikan_menu         |1794   |louiechapm       |                     |kalikan
+|56576                 |56575                |1794   |krystman         |                     |mai-chan's sweet buns
+|                     |                     |0      |                 |bbs/carts/dank_tomb-0.p8.png |dank_tomb-0
+|../../escape          |x                    |0      |                 |                     |escape
+";
+
+#[test]
+fn splore_favourites_are_read_with_their_titles() {
+    let favs = pico8::parse_favourites(FAVOURITES);
+    let got: Vec<(&str, &str)> = favs
+        .iter()
+        .map(|f| (f.id.as_str(), f.title.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("kalikan_menu-6", "kalikan"),
+            ("56576", "mai-chan's sweet buns"),
+            ("dank_tomb-0", "dank_tomb-0"),
+        ]
+    );
+}
+
+#[test]
+fn bbs_carts_live_under_the_start_of_their_id() {
+    assert_eq!(
+        pico8::bbs_url("celeste_classic-2").as_deref(),
+        Some("https://www.lexaloffle.com/bbs/cposts/ce/celeste_classic-2.p8.png")
+    );
+    assert_eq!(
+        pico8::bbs_url("15133").as_deref(),
+        Some("https://www.lexaloffle.com/bbs/cposts/1/15133.p8.png")
+    );
+    assert_eq!(pico8::bbs_url("../x"), None);
+}
+
+#[test]
+fn a_favourite_is_named_on_the_shelf_by_its_title() {
+    assert_eq!(
+        pico8::shelf_name("mai-chan's sweet buns", "56576"),
+        "Mai-chan's Sweet Buns"
+    );
+    assert_eq!(pico8::shelf_name("a/b: c?", "x-1"), "Ab C");
+    assert_eq!(pico8::shelf_name("...", "x-1"), "x-1");
+    assert_eq!(pico8::shelf_name("splore", "x-1"), "x-1");
+}
+
+#[test]
+fn splore_favourites_go_on_the_shelf_once() {
+    let d = TempDir::new().unwrap();
+    favourites(d.path(), FAVOURITES);
+    let cart = png(160, 205, |_, _| [0xff, 0, 0x4d, 0xff]);
+    bbs_cart(d.path(), "carts", "kalikan_menu-6", &cart);
+    bbs_cart(d.path(), "5", "56576", &cart);
+    let mut asked = Vec::new();
+    let added = pico8::shelve_favourites(d.path(), |id| {
+        asked.push(id.to_string());
+        pico8::Fetched::Cart(cart.clone())
+    });
+    assert_eq!(added, 3);
+    assert_eq!(asked, ["dank_tomb-0"], "asked the BBS for a cart Splore had");
+    let dir = pico8::carts_dir(d.path());
+    for name in ["Kalikan", "Mai-chan's Sweet Buns", "Dank_tomb-0"] {
+        assert!(dir.join(format!("{name}.p8.png")).is_file(), "{name}");
+    }
+    let carts = slot_store::scan(d.path()).unwrap();
+    assert!(carts.iter().any(|c| c.stem == "Kalikan"));
+
+    std::fs::remove_file(dir.join("Kalikan.p8.png")).unwrap();
+    let again = pico8::shelve_favourites(d.path(), |_| panic!("asked the BBS again"));
+    assert_eq!(again, 0);
+    assert!(
+        !dir.join("Kalikan.p8.png").exists(),
+        "a favourite taken off the shelf came back"
+    );
+
+    pico8::stock_shelf(d.path());
+    assert!(d
+        .path()
+        .join("Labels/PICO8/Mai-chan's Sweet Buns.png")
+        .is_file());
+}
+
+#[test]
+fn offline_the_bbs_is_asked_once_and_the_rest_wait() {
+    let d = TempDir::new().unwrap();
+    favourites(
+        d.path(),
+        "|one-0 |one |0 |a | |one\n|two-0 |two |0 |a | |two\n",
+    );
+    let mut asked = 0;
+    let added = pico8::shelve_favourites(d.path(), |_| {
+        asked += 1;
+        pico8::Fetched::Offline
+    });
+    assert_eq!((added, asked), (0, 1));
+    let cart = png(160, 205, |_, _| [0, 0, 0, 0xff]);
+    let added = pico8::shelve_favourites(d.path(), |_| pico8::Fetched::Cart(cart.clone()));
+    assert_eq!(added, 2, "favourites missed offline go on next time");
+}
+
+#[test]
+fn a_favourite_does_not_overwrite_a_cart_of_the_same_name() {
+    let d = TempDir::new().unwrap();
+    write_cart(d.path(), "Kalikan.p8.png", b"mine");
+    favourites(d.path(), FAVOURITES);
+    let cart = png(160, 205, |_, _| [0, 0, 0, 0xff]);
+    bbs_cart(d.path(), "carts", "kalikan_menu-6", &cart);
+    pico8::shelve_favourites(d.path(), |_| pico8::Fetched::Missing);
+    let dir = pico8::carts_dir(d.path());
+    assert_eq!(std::fs::read(dir.join("Kalikan.p8.png")).unwrap(), b"mine");
+    assert!(dir.join("Kalikan (kalikan_menu-6).p8.png").is_file());
 }
