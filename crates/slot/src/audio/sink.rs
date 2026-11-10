@@ -26,5 +26,10 @@ pub trait AudioSink: Send {
     fn open(&mut self, sample_rate: u32) -> Result<(), AudioError>;
     fn ring(&self) -> Arc<Ring>;
     fn close(&mut self) {}
+    /// Closes without waiting for the device to be let go, for when another
+    /// program is about to start and will not want it for a while yet.
+    fn close_soon(&mut self) {
+        self.close();
+    }
     fn hold_open(&self, _held: bool) {}
 }

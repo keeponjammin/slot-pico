@@ -38,6 +38,7 @@ type SwapInterval = unsafe extern "C" fn(Ptr, i32) -> u32;
 type GetProcAddress = unsafe extern "C" fn(*const c_char) -> *const c_void;
 type GetError = unsafe extern "C" fn() -> i32;
 type Terminate = unsafe extern "C" fn(Ptr) -> u32;
+type DestroySurface = unsafe extern "C" fn(Ptr, Ptr) -> u32;
 
 pub(crate) struct Egl {
     pub(crate) get_display: GetDisplay,
@@ -54,6 +55,7 @@ pub(crate) struct Egl {
     pub(crate) get_proc_address: GetProcAddress,
     pub(crate) get_error: GetError,
     pub(crate) terminate: Terminate,
+    pub(crate) destroy_surface: DestroySurface,
     pub(crate) lib: Library,
 }
 
@@ -69,8 +71,9 @@ pub struct FbdevSurface {
     display: Ptr,
     surface: Ptr,
     context: Ptr,
+    config: Ptr,
     size: (u32, u32),
-    _window: Box<FbdevWindow>,
+    window: Box<FbdevWindow>,
 }
 
 #[cfg(unix)]
@@ -146,6 +149,7 @@ impl Egl {
                 get_proc_address: sym(&lib, "eglGetProcAddress")?,
                 get_error: sym(&lib, "eglGetError")?,
                 terminate: sym(&lib, "eglTerminate")?,
+                destroy_surface: sym(&lib, "eglDestroySurface")?,
                 lib,
             })
         }
@@ -213,20 +217,7 @@ impl FbdevSurface {
                 width: hint.0 as u16,
                 height: hint.1 as u16,
             });
-            let native = &mut *window as *mut FbdevWindow as Ptr;
-            let mut surface =
-                (egl.create_window_surface)(display, config, native, std::ptr::null());
-            if surface.is_null() {
-                surface = (egl.create_window_surface)(
-                    display,
-                    config,
-                    std::ptr::null_mut(),
-                    std::ptr::null(),
-                );
-            }
-            if surface.is_null() {
-                return Err(egl.fail("eglCreateWindowSurface"));
-            }
+            let surface = window_surface(&egl, display, config, &mut window)?;
             let context_attrs = [EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE];
             let context = (egl.create_context)(
                 display,
@@ -248,10 +239,30 @@ impl FbdevSurface {
                 display,
                 surface,
                 context,
+                config,
                 size,
-                _window: window,
+                window,
             })
         }
+    }
+}
+
+/// An EGL window surface on fb0, through `window` when the driver takes it.
+unsafe fn window_surface(
+    egl: &Egl,
+    display: Ptr,
+    config: Ptr,
+    window: &mut FbdevWindow,
+) -> Result<Ptr, GfxError> {
+    let native = window as *mut FbdevWindow as Ptr;
+    let mut surface = (egl.create_window_surface)(display, config, native, std::ptr::null());
+    if surface.is_null() {
+        surface =
+            (egl.create_window_surface)(display, config, std::ptr::null_mut(), std::ptr::null());
+    }
+    match surface.is_null() {
+        true => Err(egl.fail("eglCreateWindowSurface")),
+        false => Ok(surface),
     }
 }
 
@@ -291,6 +302,26 @@ impl Surface for FbdevSurface {
 
     fn proc_address(&self, name: &str) -> *const c_void {
         gl_proc(&self.egl, &self.gles, name)
+    }
+
+    /// A new window surface on fb0, keeping the context and everything in it.
+    /// The GPU leaves out tiles it believes it already wrote into a buffer,
+    /// so after another program has drawn into fb0 the old surface's frames
+    /// would come out with that program's pixels in them. A new surface has
+    /// no such memory and writes every tile.
+    fn renew(&mut self) -> Result<(), GfxError> {
+        unsafe {
+            let none = std::ptr::null_mut();
+            (self.egl.make_current)(self.display, none, none, none);
+            (self.egl.destroy_surface)(self.display, self.surface);
+            self.surface = window_surface(&self.egl, self.display, self.config, &mut self.window)?;
+            if (self.egl.make_current)(self.display, self.surface, self.surface, self.context) == 0
+            {
+                return Err(self.egl.fail("eglMakeCurrent"));
+            }
+            (self.egl.swap_interval)(self.display, 1);
+        }
+        Ok(())
     }
 }
 

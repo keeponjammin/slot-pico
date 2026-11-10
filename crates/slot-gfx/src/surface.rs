@@ -37,6 +37,11 @@ pub trait Surface {
     fn select_panel(&mut self, _index: usize) -> Result<(), GfxError> {
         Ok(())
     }
+    /// Starts drawing into the screen afresh after another program has drawn
+    /// there, forgetting what this surface last wrote into its buffers.
+    fn renew(&mut self) -> Result<(), GfxError> {
+        Ok(())
+    }
 }
 
 pub fn fit_scale(win_w: u32, win_h: u32) -> u32 {

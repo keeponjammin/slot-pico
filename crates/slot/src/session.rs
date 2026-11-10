@@ -117,6 +117,18 @@ impl Session {
         self.sink.close();
     }
 
+    /// Closes slot's sound without waiting for the device to be let go.
+    pub fn close_audio_soon(&mut self) {
+        self.sink.close_soon();
+    }
+
+    /// Opens slot's sound again after it was closed for another program.
+    pub fn reopen_audio(&mut self) {
+        if let Err(e) = self.sink.open(crate::audio::OUTPUT_HZ) {
+            eprintln!("slot: audio: {e}");
+        }
+    }
+
     pub fn rumble(&mut self, strength: u16) {
         if strength == self.motor {
             return;
@@ -201,6 +213,13 @@ impl Session {
 
     pub fn game_visible(&self) -> bool {
         self.app.game_visible()
+    }
+
+    /// Learns which buttons are down from `events` without acting on them.
+    pub fn observe(&mut self, events: impl IntoIterator<Item = RawEvent>) {
+        for ev in events {
+            self.gestures.observe(ev);
+        }
     }
 
     pub fn feed(&mut self, events: impl IntoIterator<Item = RawEvent>, now: Millis) {

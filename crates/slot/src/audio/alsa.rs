@@ -195,6 +195,20 @@ impl AudioSink for AlsaSink {
         }
     }
 
+    fn close_soon(&mut self) {
+        if let Some(d) = self.device.take() {
+            d.stop.store(true, Ordering::Relaxed);
+            let closing = std::thread::Builder::new()
+                .name("slot-audio-close".into())
+                .spawn(move || {
+                    let _ = d.join.join();
+                });
+            if let Err(e) = closing {
+                eprintln!("slot: audio: {e}");
+            }
+        }
+    }
+
     fn hold_open(&self, held: bool) {
         self.jack.set(held);
     }

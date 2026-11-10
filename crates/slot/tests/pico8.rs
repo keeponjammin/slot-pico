@@ -493,11 +493,7 @@ fn playing_a_pico8_cart_hands_the_device_over_and_comes_back_to_it() {
     );
     let mut seated = false;
     let mut frames = 0;
-    while !a.relaunching() {
-        assert!(
-            !run.join(pico8::NEXT_FILE).exists(),
-            "handed off before the insert had played"
-        );
+    while a.handing_off().is_none() {
         assert_eq!(
             a.screen_power(),
             0.0,
@@ -515,10 +511,13 @@ fn playing_a_pico8_cart_hands_the_device_over_and_comes_back_to_it() {
         "handed off after {played} s, before the insert's {} s",
         slot::app::HAND_OFF_AT
     );
-    let next = std::fs::read_to_string(run.join(pico8::NEXT_FILE)).unwrap();
     assert_eq!(
-        Launch::decode(&next),
+        a.take_hand_off(),
         Some(Launch::Cart(pico8::carts_dir(d.path()).join("jelpi.p8")))
+    );
+    assert!(
+        !a.relaunching() && !run.join(pico8::NEXT_FILE).exists(),
+        "slot stays up while PICO-8 plays, instead of quitting for the launcher"
     );
     let state = slot_store::read_slot_state(d.path());
     assert_eq!(
@@ -531,7 +530,9 @@ fn playing_a_pico8_cart_hands_the_device_over_and_comes_back_to_it() {
         Some("jelpi")
     );
 
-    let mut a = App::boot(d.path());
+    // PICO-8 played, with slot stopped on the seated cart all along.
+    assert_eq!(a.handing_off(), None, "handed the cart off twice");
+    a.back_from_outside();
     assert!(
         matches!(a.phase(), Phase::Ejecting { cart, .. } if cart == "jelpi"),
         "coming back from PICO-8 ejects the cart instead of starting it again: {:?}",
@@ -545,7 +546,10 @@ fn playing_a_pico8_cart_hands_the_device_over_and_comes_back_to_it() {
     assert!(!a.relaunching());
     for _ in 0..120 {
         a.update(1.0 / 60.0);
-        assert!(!a.relaunching(), "coming back handed the cart off again");
+        assert!(
+            !a.relaunching() && a.handing_off().is_none(),
+            "coming back handed the cart off again"
+        );
     }
     assert!(matches!(a.phase(), Phase::Shelf), "{:?}", a.phase());
     assert_eq!(a.screen_power(), 0.0);
@@ -559,6 +563,95 @@ fn playing_a_pico8_cart_hands_the_device_over_and_comes_back_to_it() {
         "once ejected, the next boot starts on the shelf: {:?}",
         a.phase()
     );
+}
+
+/// Plays `stem`, the selected cart on the PICO-8 shelf, up to the hand-off.
+fn hand_off_selected(a: &mut App) -> Launch {
+    common::through(a, Btn::A);
+    for _ in 0..120 {
+        if a.handing_off().is_some() {
+            break;
+        }
+        a.update(1.0 / 60.0);
+    }
+    a.take_hand_off()
+        .unwrap_or_else(|| panic!("never handed off: {:?}", a.phase()))
+}
+
+fn one_pico8_cart(root: &Path) {
+    install(root);
+    write_cart(root, "celeste.p8", b"");
+    on_pico8(root, "celeste");
+    slot::root::ensure(root);
+    std::fs::write(root.join("Games/GBA/Emerald.gba"), [0u8; 512]).unwrap();
+    common::clocked(root);
+}
+
+#[test]
+fn slot_starting_while_pico8_had_the_cart_ejects_it() {
+    let d = TempDir::new().unwrap();
+    let _turn = hand_off_through(&d.path().join("run"));
+    one_pico8_cart(d.path());
+    let mut a = App::boot(d.path());
+    to_pico8_shelf(&mut a);
+    hand_off_selected(&mut a);
+    // The power went, or slot was stopped, while PICO-8 played.
+    let mut a = App::boot(d.path());
+    assert!(
+        matches!(a.phase(), Phase::Ejecting { cart, .. } if cart == "celeste"),
+        "slot starting with the cart still in PICO-8 ejects it: {:?}",
+        a.phase()
+    );
+    assert_eq!((a.screen_power(), a.seat()), (0.0, 1.0));
+    for _ in 0..120 {
+        a.update(1.0 / 60.0);
+        assert!(a.handing_off().is_none(), "the cart was handed off again");
+    }
+    assert!(matches!(a.phase(), Phase::Shelf), "{:?}", a.phase());
+}
+
+#[test]
+fn coming_back_from_pico8_keeps_the_levels_changed_while_it_played() {
+    let d = TempDir::new().unwrap();
+    let _turn = hand_off_through(&d.path().join("run"));
+    one_pico8_cart(d.path());
+    let mut a = App::boot(d.path());
+    to_pico8_shelf(&mut a);
+    hand_off_selected(&mut a);
+    // The volume keys and the brightness shortcuts work while PICO-8
+    // plays, and what they set is saved.
+    let mut disk = slot_store::read_slot_state(d.path());
+    disk.volume = 15;
+    disk.muted = true;
+    disk.brightness = 2;
+    slot_store::write_slot_state(d.path(), &disk).unwrap();
+    a.back_from_outside();
+    for _ in 0..120 {
+        a.update(1.0 / 60.0);
+    }
+    assert!(matches!(a.phase(), Phase::Shelf), "{:?}", a.phase());
+    let after = slot_store::read_slot_state(d.path());
+    assert_eq!(
+        (after.volume, after.muted, after.brightness),
+        (15, true, 2),
+        "slot wrote back the levels it had before PICO-8"
+    );
+}
+
+#[test]
+fn a_frontend_that_cannot_run_pico8_hands_off_by_exiting() {
+    let d = TempDir::new().unwrap();
+    let run = d.path().join("run");
+    let _turn = hand_off_through(&run);
+    one_pico8_cart(d.path());
+    let mut a = App::boot(d.path());
+    to_pico8_shelf(&mut a);
+    let launch = hand_off_selected(&mut a);
+    assert!(!a.relaunching());
+    a.hand_off_by_relaunch(&launch);
+    assert!(a.relaunching());
+    let next = std::fs::read_to_string(run.join(pico8::NEXT_FILE)).unwrap();
+    assert_eq!(Launch::decode(&next), Some(launch));
 }
 
 #[test]
@@ -642,15 +735,30 @@ fn the_splore_card_always_opens_the_owners_pico8() {
     let mut a = App::boot(d.path());
     to_pico8_shelf(&mut a);
     assert_eq!(a.selected_stem(), Some(pico8::SPLORE));
-    common::through(&mut a, Btn::A);
-    let mut frames = 0;
-    while !a.relaunching() {
+    assert_eq!(hand_off_selected(&mut a), Launch::Splore);
+    assert!(!run.join(pico8::NEXT_FILE).exists());
+    // Splore saved a cart to the shelf; coming back puts it there.
+    write_cart(d.path(), "jelpi.p8", p8_with_label('j').as_bytes());
+    a.back_from_outside();
+    assert!(
+        matches!(a.phase(), Phase::Ejecting { cart, .. } if cart == pico8::SPLORE),
+        "{:?}",
+        a.phase()
+    );
+    for _ in 0..120 {
         a.update(1.0 / 60.0);
-        frames += 1;
-        assert!(frames < 120, "Splore never handed off: {:?}", a.phase());
     }
-    let next = std::fs::read_to_string(run.join(pico8::NEXT_FILE)).unwrap();
-    assert_eq!(Launch::decode(&next), Some(Launch::Splore));
+    assert!(matches!(a.phase(), Phase::Shelf), "{:?}", a.phase());
+    assert_eq!(a.selected_stem(), Some(pico8::SPLORE));
+    assert!(
+        d.path().join("Labels/PICO8/jelpi.png").is_file(),
+        "a cart new to the shelf gets its label"
+    );
+    assert!(
+        a.shelf_stems().contains(&"jelpi"),
+        "a cart new to the shelf is on it: {:?}",
+        a.shelf_stems()
+    );
 }
 
 #[test]
@@ -835,4 +943,35 @@ fn pico8s_buttons_go_by_its_own_names_in_the_in_game_menu() {
     assert!(drawn(dim(own + 2)), "Start is not called Pause on PICO-8");
     assert!(!drawn(lit(QuickRow::GameA.index())), "A still goes by the Game Boy's name");
     assert!(!drawn(dim(QuickRow::GameSelect.index())), "PICO-8 has no select");
+}
+
+#[test]
+fn the_cart_waits_in_the_slot_while_pico8_is_still_quitting() {
+    let d = TempDir::new().unwrap();
+    let _turn = hand_off_through(&d.path().join("run"));
+    one_pico8_cart(d.path());
+    let mut a = App::boot(d.path());
+    to_pico8_shelf(&mut a);
+    hand_off_selected(&mut a);
+    a.back_from_outside();
+    a.set_outside_quitting(true);
+    for _ in 0..180 {
+        a.update(1.0 / 60.0);
+    }
+    assert!(
+        matches!(a.phase(), Phase::Ejecting { .. }) && a.seat() == 1.0,
+        "the cart left the slot while PICO-8 still had the sound: {:?}",
+        a.phase()
+    );
+    a.set_outside_quitting(false);
+    let mut frames = 0;
+    while !matches!(a.phase(), Phase::Shelf) {
+        a.update(1.0 / 60.0);
+        frames += 1;
+        assert!(frames < 120, "never ejected: {:?}", a.phase());
+    }
+    assert!(
+        frames < 60,
+        "the eject took {frames} frames once PICO-8 had quit"
+    );
 }

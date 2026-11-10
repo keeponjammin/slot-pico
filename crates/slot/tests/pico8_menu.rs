@@ -147,3 +147,21 @@ fn the_menu_draws_into_the_buffer_not_on_screen() {
     );
     assert_eq!(other_buffer(0, 0, 960), None);
 }
+
+#[test]
+fn the_untinted_frame_is_the_frame_untinted() {
+    let (w, h, stride) = (3u32, 2u32, 16usize);
+    let fb: Vec<u8> = (0..stride * 4).map(|i| (i * 37 % 256) as u8).collect();
+    for gain in [[1.0, 1.0, 1.0], [1.0, 0.88, 0.75], [0.5, 0.0, 0.3]] {
+        let slow = frame_rgba(&fb, stride, 1, w, h).map(|f| slot::pico8_menu::untint(&f, gain));
+        assert_eq!(
+            slot::pico8_menu::frame_rgba_untinted(&fb, stride, 1, w, h, gain),
+            slow,
+            "gain {gain:?}"
+        );
+    }
+    assert_eq!(
+        slot::pico8_menu::frame_rgba_untinted(&fb, stride, 3, w, h, [1.0; 3]),
+        None
+    );
+}

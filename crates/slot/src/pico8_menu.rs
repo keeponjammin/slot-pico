@@ -110,16 +110,61 @@ pub fn frame_rgba(fb: &[u8], stride: usize, y0: usize, w: u32, h: u32) -> Option
 /// Takes `gain` back off RGBA that the shim tinted with it. The shim hands
 /// SDL the gain as an 8-bit factor, so this divides by the same factor.
 pub fn untint(rgba: &[u8], gain: [f32; 3]) -> Vec<u8> {
-    let factor = gain.map(|g| (g.clamp(0.0, 1.0) * 255.0).round());
+    let lut = untint_lut(gain);
     rgba.chunks_exact(4)
         .flat_map(|p| {
-            let back = |c: usize| match factor[c] {
-                f if f <= 0.0 => 0,
-                f => (f32::from(p[c]) * 255.0 / f).round().min(255.0) as u8,
-            };
-            [back(0), back(1), back(2), p[3]]
+            [
+                lut[0][p[0] as usize],
+                lut[1][p[1] as usize],
+                lut[2][p[2] as usize],
+                p[3],
+            ]
         })
         .collect()
+}
+
+/// `untint` for each value of each channel, worked out once a frame instead
+/// of once a pixel.
+fn untint_lut(gain: [f32; 3]) -> [[u8; 256]; 3] {
+    gain.map(|g| {
+        let factor = (g.clamp(0.0, 1.0) * 255.0).round();
+        let mut lut = [0u8; 256];
+        if factor > 0.0 {
+            for (v, out) in lut.iter_mut().enumerate() {
+                *out = (v as f32 * 255.0 / factor).round().min(255.0) as u8;
+            }
+        }
+        lut
+    })
+}
+
+/// `untint(frame_rgba(..))` in one pass over the copy, as the menu needs it
+/// each time it opens.
+pub fn frame_rgba_untinted(
+    fb: &[u8],
+    stride: usize,
+    y0: usize,
+    w: u32,
+    h: u32,
+    gain: [f32; 3],
+) -> Option<Vec<u8>> {
+    let (w, h) = (w as usize, h as usize);
+    let end = (y0 + h).checked_mul(stride)?;
+    if w * 4 > stride || end > fb.len() {
+        return None;
+    }
+    let lut = untint_lut(gain);
+    let mut rgba = vec![0u8; w * h * 4];
+    for (y, out) in rgba.chunks_exact_mut(w * 4).enumerate() {
+        let row = &fb[(y0 + y) * stride..][..w * 4];
+        for (px, o) in row.chunks_exact(4).zip(out.chunks_exact_mut(4)) {
+            o[0] = lut[0][px[2] as usize];
+            o[1] = lut[1][px[1] as usize];
+            o[2] = lut[2][px[0] as usize];
+            o[3] = 0xff;
+        }
+    }
+    Some(rgba)
 }
 
 /// The first row of the buffer not on screen, when fb0's `all` rows hold two
@@ -140,12 +185,14 @@ pub fn to_xrgb(rgba: &[u8]) -> Vec<u8> {
 }
 
 #[cfg(unix)]
-pub use screen::{blank, grab, power_off, Overlay, Saved, Still};
+pub use screen::{blank, grab, power_off, Kept, Overlay, Saved, Still};
 
 #[cfg(unix)]
 mod screen {
     use std::io::Write as _;
     use std::os::unix::io::AsRawFd;
+
+    use std::path::Path;
 
     use slot_gfx::{Canvas, Compositor, Draw, FbdevSurface, Surface, TexId};
     use slot_input::Millis;
@@ -164,6 +211,8 @@ mod screen {
     /// and how many times it looks before taking the last.
     const SETTLE_GAP: std::time::Duration = std::time::Duration::from_millis(20);
     const SETTLE_TRIES: usize = 5;
+    /// The rows in a tile the GPU writes at once.
+    const TILE: usize = 16;
     const EVIOCGRAB: u64 = 0x4004_4590;
     const FBIOGET_VSCREENINFO: u64 = 0x4600;
     const FBIOPAN_DISPLAY: u64 = 0x4606;
@@ -287,21 +336,45 @@ mod screen {
         /// leaves stale tiles the GPU will not draw again, since it skips
         /// tiles it believes it already wrote: they show as lines until the
         /// game redraws there.
+        ///
+        /// The GPU is done with a frame within a refresh, so the copy is
+        /// taken a refresh after PICO-8 stopped, and then looked over once
+        /// more, a row in each row of tiles, which is quick. Reading fb0 is
+        /// slow, being uncached, so it is read whole as few times as can be.
         pub fn settled() -> Option<Saved> {
+            std::thread::sleep(SETTLE_GAP);
             let mut last = Saved::take()?;
             for tries in 0..SETTLE_TRIES {
-                std::thread::sleep(SETTLE_GAP);
-                let next = Saved::take()?;
-                if next.bytes == last.bytes {
+                if last.still_there()? {
                     if tries > 0 {
-                        eprintln!("slot: pico8: menu: the screen settled after {} copies", tries + 2);
+                        eprintln!("slot: pico8: menu: the screen settled after {} copies", tries + 1);
                     }
-                    return Some(next);
+                    return Some(last);
                 }
-                last = next;
+                std::thread::sleep(SETTLE_GAP);
+                last = Saved::take()?;
             }
             eprintln!("slot: pico8: menu: the screen kept changing, using the last copy");
             Some(last)
+        }
+
+        /// Whether fb0 still matches this copy, looked at in one row of each
+        /// row of tiles: a tile the GPU wrote since would differ there,
+        /// unless only its other rows changed. Without the stride, all of it.
+        fn still_there(&self) -> Option<bool> {
+            let fb = Mapped::open()?;
+            let now = fb.bytes();
+            if now.len() != self.bytes.len() {
+                return Some(false);
+            }
+            let Some((stride, _)) = self.front else {
+                return Some(now == &self.bytes[..]);
+            };
+            let rows = now.len() / stride;
+            Some((TILE / 2..rows).step_by(TILE).all(|y| {
+                let at = y * stride..(y + 1) * stride;
+                now[at.clone()] == self.bytes[at]
+            }))
         }
 
         /// Writes the copy back, so the screen is what PICO-8 believes it is.
@@ -314,10 +387,10 @@ mod screen {
             fb.bytes_mut()[..n].copy_from_slice(&self.bytes[..n]);
         }
 
-        /// The frame on screen, as RGBA, when fb0 is 32-bit.
-        fn front(&self, w: u32, h: u32) -> Option<Vec<u8>> {
+        /// The frame on screen, as RGBA without `gain`, when fb0 is 32-bit.
+        fn front_untinted(&self, w: u32, h: u32, gain: [f32; 3]) -> Option<Vec<u8>> {
             let (stride, y0) = self.front?;
-            super::frame_rgba(&self.bytes, stride, y0, w, h)
+            super::frame_rgba_untinted(&self.bytes, stride, y0, w, h, gain)
         }
     }
 
@@ -483,11 +556,16 @@ mod screen {
         if (y0 + h as usize) * stride > fb.len {
             return false;
         }
-        let rows = super::to_xrgb(rgba);
+        // A row at a time through a small buffer: fb0 takes whole rows
+        // best, and the frame is not copied whole first.
         let mem = fb.bytes_mut();
-        for (y, row) in rows.chunks_exact(row_bytes).enumerate() {
+        let mut row = vec![0u8; row_bytes];
+        for (y, src) in rgba.chunks_exact(row_bytes).take(h as usize).enumerate() {
+            for (px, o) in src.chunks_exact(4).zip(row.chunks_exact_mut(4)) {
+                o.copy_from_slice(&[px[2], px[1], px[0], 0xff]);
+            }
             let at = (y0 + y) * stride;
-            mem[at..at + row_bytes].copy_from_slice(row);
+            mem[at..at + row_bytes].copy_from_slice(&row);
         }
         true
     }
@@ -507,28 +585,59 @@ mod screen {
         slot: (TexId, TexId),
     }
 
-    /// slot's own window on the screen, opened the first time the menu is.
+    /// slot's own window on the screen: slot's, lent while PICO-8 plays, or
+    /// one of the runner's own when it runs as `slot --pico8`.
     pub struct Overlay {
         // Fields drop in this order: the compositor's GL objects need the
         // surface's context, so it must go first.
         compositor: Compositor,
-        surface: FbdevSurface,
+        surface: Box<dyn Surface>,
         panel: (u32, u32),
         window: (u32, u32),
         turned: bool,
-        faces: QuickMenuFaces,
-        icons: Vec<TexId>,
-        backdrop: Option<(TexId, u32, u32)>,
+        kept: Kept,
         show_backdrop: bool,
         /// The tint the shim gave PICO-8's frames, taken off the backdrop
         /// so the compositor's grade puts it on once, as in slot.
         tint: [f32; 3],
-        mouth: Option<Mouth>,
-        status: Option<Status>,
+        /// The mouth of the cart PICO-8 is running, in `kept.mouths`.
+        mouth: Option<usize>,
         /// The first row of the buffer PICO-8 had on screen when it was
         /// stopped. The menu draws into the other buffer and shows it, so
         /// this one goes back on screen before PICO-8 carries on.
         home: Option<usize>,
+    }
+
+    /// What the menu uploads into the compositor, kept for the next time
+    /// slot lends it: slot's compositor has no way to free a texture, and
+    /// uploading it all again would only make the menu slower to come up.
+    pub struct Kept {
+        faces: QuickMenuFaces,
+        icons: Vec<TexId>,
+        backdrop: Option<(TexId, u32, u32)>,
+        /// Each cart seated so far, with whether slot was light.
+        mouths: Vec<(String, bool, Mouth)>,
+        status: Option<Status>,
+    }
+
+    impl Kept {
+        fn upload(compositor: &mut Compositor) -> Kept {
+            let faces = upload_faces(compositor);
+            let icons = Icon::ALL
+                .iter()
+                .map(|i| {
+                    let f = icon_face(*i, HUD_ICON_PX, HUD_INK);
+                    compositor.create_texture(f.w, f.h, &f.rgba)
+                })
+                .collect();
+            Kept {
+                faces,
+                icons,
+                backdrop: None,
+                mouths: Vec::new(),
+                status: None,
+            }
+        }
     }
 
     /// The battery and the clock in the top corners, as slot shows them over
@@ -540,51 +649,62 @@ mod screen {
         bolt: TexId,
     }
 
+    fn turn_of(panel: (u32, u32)) -> PanelTurn {
+        panel_turn(
+            panel,
+            crate::baseos::var("BASEOS_PANEL_ROTATION_CCW").as_deref(),
+            std::env::var("SLOT_ROTATE").ok().as_deref(),
+        )
+    }
+
     impl Overlay {
+        /// A window of the runner's own, for `slot --pico8`.
         pub fn open() -> Result<Overlay, String> {
             let surface = FbdevSurface::new().map_err(|e| e.to_string())?;
             let mut compositor = Compositor::new(&surface).map_err(|e| e.to_string())?;
             let panel = surface.window_size();
-            let turn = panel_turn(
-                panel,
-                crate::baseos::var("BASEOS_PANEL_ROTATION_CCW").as_deref(),
-                std::env::var("SLOT_ROTATE").ok().as_deref(),
-            );
-            let turned = turn != PanelTurn::None;
-            let window = if turned { (panel.1, panel.0) } else { panel };
-            if turned {
+            let turn = turn_of(panel);
+            if turn != PanelTurn::None {
                 compositor
                     .set_panel_turn(panel, turn == PanelTurn::Ccw)
                     .map_err(|e| e.to_string())?;
             }
-            let faces = upload_faces(&mut compositor);
-            let icons = Icon::ALL
-                .iter()
-                .map(|i| {
-                    let f = icon_face(*i, HUD_ICON_PX, HUD_INK);
-                    compositor.create_texture(f.w, f.h, &f.rgba)
-                })
-                .collect();
-            Ok(Overlay {
+            Ok(Overlay::adopt(compositor, Box::new(surface), None))
+        }
+
+        /// slot's own window, lent while PICO-8 plays, already turned the way
+        /// the panel is. `kept` is what the menu uploaded the last time.
+        pub fn adopt(
+            mut compositor: Compositor,
+            surface: Box<dyn Surface>,
+            kept: Option<Kept>,
+        ) -> Overlay {
+            let panel = surface.window_size();
+            let turned = turn_of(panel) != PanelTurn::None;
+            let window = if turned { (panel.1, panel.0) } else { panel };
+            let kept = kept.unwrap_or_else(|| Kept::upload(&mut compositor));
+            Overlay {
                 surface,
                 compositor,
                 panel,
                 window,
                 turned,
-                faces,
-                icons,
-                backdrop: None,
+                kept,
                 show_backdrop: false,
                 tint: [1.0; 3],
                 mouth: None,
-                status: None,
                 home: None,
-            })
+            }
+        }
+
+        /// Gives slot its window back, with what the menu uploaded into it.
+        pub fn give_back(self) -> (Compositor, Box<dyn Surface>, Kept) {
+            (self.compositor, self.surface, self.kept)
         }
 
         /// slot's HUD icons, for `Hud::set_icons`.
         pub fn hud_icons(&self) -> Vec<TexId> {
-            self.icons.clone()
+            self.kept.icons.clone()
         }
 
         /// The HUD's strip as it would look over a game, premultiplied RGBA
@@ -627,34 +747,45 @@ mod screen {
             let (w, h) = self.panel;
             let frame = match self.turned {
                 true => None,
-                false => saved.front(w, h).map(|f| super::untint(&f, self.tint)),
+                false => saved.front_untinted(w, h, self.tint),
             };
             self.show_backdrop = frame.is_some();
             let Some(rgba) = frame else {
                 return;
             };
-            match self.backdrop {
+            match self.kept.backdrop {
                 Some((tex, bw, bh)) if (bw, bh) == (w, h) => {
                     self.compositor.update_texture(tex, w, h, &rgba)
                 }
                 _ => {
                     let tex = self.compositor.create_texture(w, h, &rgba);
-                    self.backdrop = Some((tex, w, h));
+                    self.kept.backdrop = Some((tex, w, h));
                 }
             }
         }
 
         /// Seats the cart slot handed to PICO-8 in the mouth under the menu:
         /// its face, the plastic behind a clear one, and the slot in slot's
-        /// light or dark. Built once, the first time the menu opens. Without
-        /// the cart, the menu goes on without the mouth.
-        pub fn seat(&mut self, root: &std::path::Path, state: &SlotState) {
+        /// light or dark. Built once per cart and kept, so it is cheap to call
+        /// before the menu is ever opened. Without the cart, the menu goes on
+        /// without the mouth.
+        pub fn seat(&mut self, root: &Path, state: &SlotState) {
             if self.mouth.is_some() {
                 return;
             }
             let Some(stem) = state.cart.as_deref() else {
                 return;
             };
+            let light = state.appearance.light();
+            if let Some(i) = self
+                .kept
+                .mouths
+                .iter()
+                .position(|(s, l, _)| s == stem && *l == light)
+            {
+                self.mouth = Some(i);
+                return;
+            }
             let cart = slot_store::scan_platform(root, Platform::Pico8)
                 .ok()
                 .and_then(|carts| carts.into_iter().find(|c| c.stem == stem));
@@ -672,20 +803,31 @@ mod screen {
                 ],
                 false => [None, None],
             };
-            let (back, front) = match state.appearance.light() {
-                true => (slot_ui::slot_back_light(), slot_ui::slot_front_light()),
-                false => (slot_ui::slot_back(), slot_ui::slot_front()),
+            // The slot itself is the same under every cart.
+            let slot = match self.kept.mouths.iter().find(|(_, l, _)| *l == light) {
+                Some((_, _, m)) => m.slot,
+                None => {
+                    let (back, front) = match light {
+                        true => (slot_ui::slot_back_light(), slot_ui::slot_front_light()),
+                        false => (slot_ui::slot_back(), slot_ui::slot_front()),
+                    };
+                    (
+                        c.create_texture(slot_ui::SLOT_W, slot_ui::SLOT_H, back),
+                        c.create_texture(slot_ui::SLOT_W, slot_ui::SLOT_H, front),
+                    )
+                }
             };
-            let slot = (
-                c.create_texture(slot_ui::SLOT_W, slot_ui::SLOT_H, back),
-                c.create_texture(slot_ui::SLOT_W, slot_ui::SLOT_H, front),
-            );
-            self.mouth = Some(Mouth {
-                cart,
-                face,
-                behind,
-                slot,
-            });
+            self.kept.mouths.push((
+                stem.to_string(),
+                light,
+                Mouth {
+                    cart,
+                    face,
+                    behind,
+                    slot,
+                },
+            ));
+            self.mouth = Some(self.kept.mouths.len() - 1);
         }
 
         /// The battery and the time for the top corners, in the ink slot
@@ -700,7 +842,7 @@ mod screen {
                 }
                 None => (c.create_texture(face.w, face.h, &face.rgba), face.w),
             };
-            let old = self.status.take();
+            let old = self.kept.status.take();
             let percent = battery.map_or_else(String::new, |b| format!("{}%", b.percent));
             let percent = put(word_ink(&percent, ink), old.as_ref().map(|s| s.percent));
             let clock = put(word_ink(clock, ink), old.as_ref().map(|s| s.clock));
@@ -711,7 +853,7 @@ mod screen {
                     c.create_texture(f.w, f.h, &f.rgba)
                 }
             };
-            self.status = Some(Status {
+            self.kept.status = Some(Status {
                 battery,
                 percent,
                 clock,
@@ -766,7 +908,7 @@ mod screen {
             let canvas = Canvas::of(self.window);
             let dy = (1.0 - ease(footer.clamp(0.0, 1.0))) * MOUTH_H;
             let mut out = Vec::new();
-            if let (true, Some((tex, _, _))) = (self.show_backdrop, self.backdrop) {
+            if let (true, Some((tex, _, _))) = (self.show_backdrop, self.kept.backdrop) {
                 out.push(Draw::Tex {
                     x: 0.0,
                     y: 0.0,
@@ -786,7 +928,7 @@ mod screen {
                     networks: None,
                     romm: [None; 4],
                     kid_shelf: None,
-                    faces: Some(&self.faces),
+                    faces: Some(&self.kept.faces),
                     ground: None,
                     palette: None,
                     gba_bezel: None,
@@ -806,7 +948,7 @@ mod screen {
                     canvas,
                 }
                 .draw(&mut out);
-                if let Some(s) = &self.status {
+                if let Some(s) = &self.kept.status {
                     draw_corners(
                         canvas,
                         s.battery,
@@ -819,7 +961,7 @@ mod screen {
             }
             if footer > 0.0 {
                 let start = out.len();
-                if let Some(m) = &self.mouth {
+                if let Some((_, _, m)) = self.mouth.and_then(|i| self.kept.mouths.get(i)) {
                     SlotChrome {
                         cart: &m.cart,
                         face: Some(m.face),
@@ -837,7 +979,7 @@ mod screen {
                     }
                     .draw(&mut out);
                 }
-                let [_, _, open, resume, ..] = self.faces.legend;
+                let [_, _, open, resume, ..] = self.kept.faces.legend;
                 let y = canvas.h - MOUTH_H;
                 for (face, right) in [(resume, false), (open, true)] {
                     let seen = face.1.saturating_sub(HINT_EDGE) as f32;

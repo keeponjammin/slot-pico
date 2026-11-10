@@ -111,6 +111,9 @@ impl ApplicationHandler for Slot {
                 if self.frontend.restarting() {
                     self.frontend.restart();
                 }
+                if let Some(launch) = self.frontend.take_hand_off() {
+                    self.frontend.hand_off_by_relaunch(&launch);
+                }
                 if self.frontend.relaunching() {
                     self.frontend.relaunch();
                     events.exit();
