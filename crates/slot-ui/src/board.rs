@@ -6,6 +6,11 @@ use crate::cart::{
     cart_shape, clean_label, shaped_backing, CartFace, CartShape, CART_H, CART_W, GB_CART_H,
     GB_CART_W,
 };
+use crate::pico8_cart::{
+    pixel_text_w, print_pixels, PICO8_BOARD_REST_H, PICO8_BOARD_Y, PICO8_CART_H, PICO8_CART_W,
+    PICO8_CHIP_H, PICO8_CHIP_W, PICO8_LID_REST_H, PICO8_LID_REST_Y, PICO8_SEAT_X, PICO8_SEAT_Y,
+    PICO8_SLIDE_UP,
+};
 use crate::shelf::foot_y;
 use crate::slot_chrome::ease;
 use crate::text;
@@ -83,7 +88,8 @@ fn marking_face(title: &[String]) -> CartFace {
 pub fn board_face(cart: &Cart) -> CartFace {
     match cart_shape(cart) {
         CartShape::Gba => {}
-        shape => return shaped_backing(bitmaps::gb_board_empty(), shape),
+        shape @ CartShape::Gb(_) => return shaped_backing(bitmaps::gb_board_empty(), shape),
+        CartShape::Pico8 => return shaped_backing(bitmaps::pico8_board_empty(), CartShape::Pico8),
     }
     let mut face = CartFace {
         rgba: bitmaps::board().to_vec(),
@@ -280,13 +286,15 @@ pub fn shelf_cart_at(canvas: Canvas, x: f32, scale: f32) -> Placed {
 }
 
 pub fn shelf_cart_shaped(canvas: Canvas, shape: CartShape, x: f32, scale: f32) -> Placed {
-    if !shape.tall() {
-        return shelf_cart_at(canvas, x, scale);
-    }
-    let (w, h) = (GB_CART_W as f32 * scale, GB_CART_H as f32 * scale);
+    let (cw, ch) = match shape {
+        CartShape::Gba => return shelf_cart_at(canvas, x, scale),
+        CartShape::Gb(_) => (GB_CART_W as f32, GB_CART_H as f32),
+        CartShape::Pico8 => (PICO8_CART_W as f32, PICO8_CART_H as f32),
+    };
+    let (w, h) = (cw * scale, ch * scale);
     Placed {
         x,
-        y: foot_y(canvas, GB_CART_H as f32) - h,
+        y: foot_y(canvas, ch) - h,
         w,
         h,
     }
@@ -304,15 +312,21 @@ pub fn board_from_shaped(
     shelf: Placed,
     progress: f32,
 ) -> Placed {
-    if !shape.tall() {
-        return board_from(canvas, shelf, progress);
-    }
-    let w = GB_BOARD_REST_H * GB_CART_W as f32 / GB_CART_H as f32;
+    let (aspect, top, tall) = match shape {
+        CartShape::Gba => return board_from(canvas, shelf, progress),
+        CartShape::Gb(_) => (GB_CART_W as f32 / GB_CART_H as f32, GB_BOARD_Y, GB_BOARD_REST_H),
+        CartShape::Pico8 => (
+            PICO8_CART_W as f32 / PICO8_CART_H as f32,
+            PICO8_BOARD_Y,
+            PICO8_BOARD_REST_H,
+        ),
+    };
+    let w = tall * aspect;
     let rest = Placed {
         x: canvas.centred(w),
-        y: GB_BOARD_Y + canvas.inset_y(),
+        y: top + canvas.inset_y(),
         w,
-        h: GB_BOARD_REST_H,
+        h: tall,
     };
     lerp(board_in(shelf), rest, lift_of(progress))
 }
@@ -323,19 +337,31 @@ pub fn lid_from_shaped(
     shelf: Placed,
     progress: f32,
 ) -> (Placed, f32) {
-    if !shape.tall() {
-        return lid_from(canvas, shelf, progress);
-    }
+    let (aspect, slide, centre, tall) = match shape {
+        CartShape::Gba => return lid_from(canvas, shelf, progress),
+        CartShape::Gb(_) => (
+            GB_CART_W as f32 / GB_CART_H as f32,
+            GB_SLIDE_UP,
+            GB_LID_REST_Y,
+            GB_LID_REST_H,
+        ),
+        CartShape::Pico8 => (
+            PICO8_CART_W as f32 / PICO8_CART_H as f32,
+            PICO8_SLIDE_UP,
+            PICO8_LID_REST_Y,
+            PICO8_LID_REST_H,
+        ),
+    };
     let slid = Placed {
-        y: shelf.y - GB_SLIDE_UP * slide_of(progress),
+        y: shelf.y - slide * slide_of(progress),
         ..shelf
     };
-    let w = GB_LID_REST_H * GB_CART_W as f32 / GB_CART_H as f32;
+    let w = tall * aspect;
     let rest = Placed {
         x: canvas.centred(w),
-        y: GB_LID_REST_Y + canvas.inset_y() - GB_LID_REST_H / 2.0,
+        y: centre + canvas.inset_y() - tall / 2.0,
         w,
-        h: GB_LID_REST_H,
+        h: tall,
     };
     let lift = lift_of(progress);
     (lerp(slid, rest, lift), LID_TURN * lift)
@@ -386,10 +412,25 @@ pub const GB_SEATS: Seats = Seats {
     bitmap_w: GB_CART_W as f32,
 };
 
+/// A PICO-8 cart's two seats, in its board's own pixels.
+pub const PICO8_SEATS: Seats = Seats {
+    socket_u: PICO8_SEAT_X,
+    socket_v: PICO8_SEAT_Y,
+    chip_u: PICO8_SEAT_X,
+    chip_v: PICO8_SEAT_Y,
+    socket_size: (PICO8_CHIP_W as f32, PICO8_CHIP_H as f32),
+    chip_size: (PICO8_CHIP_W as f32, PICO8_CHIP_H as f32),
+    shadow_uv: (PICO8_CHIP_W as f32 / 2.0, PICO8_CHIP_H as f32 + 3.0),
+    units_w: PICO8_CART_W as f32,
+    units_h: PICO8_CART_H as f32,
+    bitmap_w: PICO8_CART_W as f32,
+};
+
 pub fn seats(shape: CartShape) -> Seats {
-    match shape.tall() {
-        false => GBA_SEATS,
-        true => GB_SEATS,
+    match shape {
+        CartShape::Gba => GBA_SEATS,
+        CartShape::Gb(_) => GB_SEATS,
+        CartShape::Pico8 => PICO8_SEATS,
     }
 }
 
@@ -526,6 +567,47 @@ pub fn gb_chip_face(core: Option<Core>) -> CartFace {
     let mut face = bitmap_face(bitmaps::gb_chip(), GB_CHIP_W, GB_CHIP_H);
     if let Some(layout) = core.and_then(|c| name_layout(c.text(), (GB_CHIP_H - 12) as f32)) {
         ink_turned(&mut face, &layout, CHIP_INK, 1.0);
+    }
+    padded(&face, TURN_PAD)
+}
+
+/// The ink a core's name is printed in on a PICO-8 chip, and silkscreened beside its seat.
+const PICO8_CHIP_INK: [u8; 3] = [0xc2, 0xc3, 0xc7];
+const PICO8_SILK_INK: [u8; 3] = [0xee, 0xea, 0xf2];
+
+/// The largest whole size PICO-8's letters print `name` at inside `room` pixels, at most `max`.
+fn pico8_name_px(name: &str, room: u32, max: i32) -> i32 {
+    (1..=max)
+        .rev()
+        .find(|px| pixel_text_w(name) as i32 * px <= room as i32)
+        .unwrap_or(1)
+}
+
+fn print_centred(face: &mut CartFace, name: &str, px: i32, ink: [u8; 3], alpha: u8) {
+    let (tw, th) = (pixel_text_w(name) as i32 * px, 5 * px);
+    let x = (face.w as i32 - tw) / 2;
+    let y = (face.h as i32 - th) / 2;
+    print_pixels(&mut face.rgba, face.w, name, x, y, px, ink, alpha);
+}
+
+/// A PICO-8 seat's silkscreen: the core's name, faint, where its chip sits.
+pub fn pico8_socket_face(core: Core) -> CartFace {
+    let mut face = CartFace {
+        rgba: vec![0; (PICO8_CHIP_W * PICO8_CHIP_H * 4) as usize],
+        w: PICO8_CHIP_W,
+        h: PICO8_CHIP_H,
+    };
+    let px = pico8_name_px(core.text(), PICO8_CHIP_W - 16, 2);
+    print_centred(&mut face, core.text(), px, PICO8_SILK_INK, 0x90);
+    face
+}
+
+/// A PICO-8 core's chip, its name printed across it in PICO-8's own letters.
+pub fn pico8_chip_face(core: Option<Core>) -> CartFace {
+    let mut face = bitmap_face(bitmaps::pico8_chip(), PICO8_CHIP_W, PICO8_CHIP_H);
+    if let Some(core) = core {
+        let px = pico8_name_px(core.text(), PICO8_CHIP_W - 16, 2);
+        print_centred(&mut face, core.text(), px, PICO8_CHIP_INK, 0xff);
     }
     padded(&face, TURN_PAD)
 }

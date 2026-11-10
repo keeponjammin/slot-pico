@@ -602,6 +602,9 @@ pub struct App {
     core_gb_socket_faces: Vec<TexId>,
     core_gb_chip_faces: Vec<TexId>,
     core_gb_blank_chip_face: Option<TexId>,
+    core_pico8_socket_faces: Vec<TexId>,
+    core_pico8_chip_faces: Vec<TexId>,
+    core_pico8_blank_chip_face: Option<TexId>,
     core_chip_shadow_face: Option<TexId>,
     core_legend_faces: [Vec<(TexId, u32)>; 2],
     game_menu: Option<GameMenu>,
@@ -1102,6 +1105,9 @@ impl App {
             core_gb_socket_faces: Vec::new(),
             core_gb_chip_faces: Vec::new(),
             core_gb_blank_chip_face: None,
+            core_pico8_socket_faces: Vec::new(),
+            core_pico8_chip_faces: Vec::new(),
+            core_pico8_blank_chip_face: None,
             core_chip_shadow_face: None,
             core_legend_faces: [Vec::new(), Vec::new()],
             game_menu: None,
@@ -9013,6 +9019,18 @@ impl App {
         self.core_gb_blank_chip_face = Some(blank);
     }
 
+    /// The seats' silkscreen and the chips for a PICO-8 cart's own board, one of each per core.
+    pub fn set_core_pico8_part_faces(
+        &mut self,
+        sockets: Vec<TexId>,
+        chips: Vec<TexId>,
+        blank: TexId,
+    ) {
+        self.core_pico8_socket_faces = sockets;
+        self.core_pico8_chip_faces = chips;
+        self.core_pico8_blank_chip_face = Some(blank);
+    }
+
     pub fn set_core_legend_faces(
         &mut self,
         dark: Vec<(TexId, u32)>,
@@ -9187,13 +9205,18 @@ impl App {
                     alpha: 1.0,
                 });
             }
-            let (sockets, chips, blank) = match shape.tall() {
-                true => (
+            let (sockets, chips, blank) = match shape {
+                CartShape::Gb(_) => (
                     &self.core_gb_socket_faces,
                     &self.core_gb_chip_faces,
                     self.core_gb_blank_chip_face,
                 ),
-                false => (
+                CartShape::Pico8 => (
+                    &self.core_pico8_socket_faces,
+                    &self.core_pico8_chip_faces,
+                    self.core_pico8_blank_chip_face,
+                ),
+                CartShape::Gba => (
                     &self.core_socket_faces,
                     &self.core_chip_faces,
                     self.core_blank_chip_face,

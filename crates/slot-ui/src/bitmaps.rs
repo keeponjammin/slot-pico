@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use crate::pico8_cart::{PICO8_CART_H, PICO8_CART_W};
+use crate::pico8_cart::{PICO8_CART_H, PICO8_CART_W, PICO8_CHIP_H, PICO8_CHIP_W};
 use slot_gfx::OUT_W;
 
 use crate::art::decode_png_bytes;
@@ -46,6 +46,9 @@ const GBA_INTERIOR_PNG: &[u8] = include_bytes!("../../../assets/gba_interior.png
 const GB_INTERIOR_PNG: &[u8] = include_bytes!("../../../assets/gb_interior.png");
 const GBC_INTERIOR_PNG: &[u8] = include_bytes!("../../../assets/gbc_interior.png");
 const PICO8_INTERIOR_PNG: &[u8] = include_bytes!("../../../assets/pico8_interior.png");
+const PICO8_BOARD_PNG: &[u8] = include_bytes!("../../../assets/pico8_board.png");
+const PICO8_BOARD_EMPTY_PNG: &[u8] = include_bytes!("../../../assets/pico8_board_empty.png");
+const PICO8_CHIP_PNG: &[u8] = include_bytes!("../../../assets/pico8_chip.png");
 const GB_BOARD_PNG: &[u8] = include_bytes!("../../../assets/gb_board.png");
 const GB_BOARD_EMPTY_PNG: &[u8] = include_bytes!("../../../assets/gb_board_empty.png");
 const GB_CHIP_PNG: &[u8] = include_bytes!("../../../assets/gb_chip.png");
@@ -147,7 +150,7 @@ pub fn gbc_cart() -> &'static [u8] {
 }
 
 /// The PICO-8 cart's outline, from `assets/pico8_cart.png` (drawn by
-/// `tools/pico8_cart.py`): pixel-stepped corners.
+/// `tools/pico8_cart.py`).
 pub fn pico8_cart() -> &'static [u8] {
     static P: OnceLock<Vec<u8>> = OnceLock::new();
     load(PICO8_CART_PNG, PICO8_CART_W, PICO8_CART_H, &P)
@@ -188,6 +191,25 @@ pub fn gb_board() -> &'static [u8] {
 pub fn gb_board_empty() -> &'static [u8] {
     static P: OnceLock<Vec<u8>> = OnceLock::new();
     load(GB_BOARD_EMPTY_PNG, GB_CART_W, GB_CART_H, &P)
+}
+
+/// The board inside a PICO-8 cart, a chip seated, from `assets/pico8_board.png`: drawn between
+/// a clear cart's back and front plastic.
+pub fn pico8_board() -> &'static [u8] {
+    static P: OnceLock<Vec<u8>> = OnceLock::new();
+    load(PICO8_BOARD_PNG, PICO8_CART_W, PICO8_CART_H, &P)
+}
+
+/// The same board with both seats empty, for the core picker to seat its chips in.
+pub fn pico8_board_empty() -> &'static [u8] {
+    static P: OnceLock<Vec<u8>> = OnceLock::new();
+    load(PICO8_BOARD_EMPTY_PNG, PICO8_CART_W, PICO8_CART_H, &P)
+}
+
+/// A PICO-8 core's chip, from `assets/pico8_chip.png`, its name left off.
+pub fn pico8_chip() -> &'static [u8] {
+    static P: OnceLock<Vec<u8>> = OnceLock::new();
+    load(PICO8_CHIP_PNG, PICO8_CHIP_W, PICO8_CHIP_H, &P)
 }
 
 pub fn gb_chip() -> &'static [u8] {
