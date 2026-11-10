@@ -19,6 +19,39 @@ const STEP_TIMEOUT: Duration = Duration::from_millis(12);
 
 const LOG_SYNC: Duration = Duration::from_secs(1);
 
+/// Hands the device to the owner's PICO-8 and takes it back, without slot
+/// going anywhere: PICO-8 starts at once instead of after slot has quit, and
+/// slot ejects the cart the moment PICO-8 leaves instead of starting again.
+/// slot lends its window for the menu over PICO-8 and gets it back, with a
+/// fresh surface, since PICO-8 has drawn into the screen since. `None` if
+/// the window did not come back, which leaves slot nothing to draw with.
+fn hand_to_pico8(
+    root: &std::path::Path,
+    launch: &slot::pico8::Launch,
+    compositor: Compositor,
+    surface: Box<dyn Surface>,
+    kept: &mut Option<slot::pico8_menu::Kept>,
+) -> Option<(Compositor, Box<dyn Surface>)> {
+    let run = std::env::var_os(slot::loading_mark::RUN_VAR)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/run"));
+    let began = Instant::now();
+    let overlay = slot::pico8_menu::Overlay::adopt(compositor, surface, kept.take());
+    eprintln!("slot: pico8: window lent in {:?}", began.elapsed());
+    let ended = slot::pico8::play(root, &run, launch, slot::pico8::Window::Lent(overlay));
+    let Some(overlay) = ended.overlay else {
+        eprintln!("slot: pico8: the window did not come back, stopping");
+        return None;
+    };
+    let (compositor, mut surface, back) = overlay.give_back();
+    *kept = Some(back);
+    if let Err(e) = surface.renew() {
+        eprintln!("slot: pico8: could not renew the surface: {e}");
+    }
+    eprintln!("slot: pico8: slot again at {:.1} ms", slot::boot_time::ms());
+    Some((compositor, surface))
+}
+
 pub fn run() {
     slot::boot_time::mark("start");
     let _ = std::thread::Builder::new()
@@ -126,6 +159,7 @@ pub fn run() {
         }
         None => Pacer::new(),
     };
+    let mut kept: Option<slot::pico8_menu::Kept> = None;
     let (mut frames, mut missed, mut early, mut stale) = (0u32, 0u32, 0u32, 0u32);
     let mut stages = Stages::default();
     loop {
@@ -136,6 +170,15 @@ pub fn run() {
         frontend.set_ds_touch(input.touch());
         if frontend.restarting() {
             frontend.restart();
+        }
+        frontend.set_outside_quitting(slot::pico8::still_quitting());
+        if let Some(launch) = frontend.take_hand_off() {
+            match hand_to_pico8(&root, &launch, compositor, surface, &mut kept) {
+                Some((c, s)) => (compositor, surface) = (c, s),
+                None => return,
+            }
+            frontend.back_from_outside(&mut input);
+            continue;
         }
         if frontend.relaunching() {
             frontend.relaunch();

@@ -1127,7 +1127,7 @@ pub fn write_next(run: &Path, launch: &Launch) -> std::io::Result<()> {
 }
 
 #[cfg(unix)]
-pub use runner::run;
+pub use runner::{play, run, still_quitting, Ended, Window};
 
 #[cfg(unix)]
 mod runner {
@@ -1147,6 +1147,93 @@ mod runner {
     use crate::pico8_menu::{grab, power_off, Menu, Overlay, Saved, Step, Still};
     use slot_ui::{Hud, HudKind};
 
+    /// Where the menu over PICO-8 draws.
+    pub enum Window {
+        /// A window of the runner's own, opened before PICO-8's when the
+        /// shim is there to take the HUD, else the first time the menu opens.
+        Own,
+        /// slot's own window, lent while PICO-8 plays.
+        Lent(Overlay),
+    }
+
+    /// How a game of PICO-8 ended.
+    pub struct Ended {
+        /// The lent window, to give back to slot.
+        pub overlay: Option<Overlay>,
+        /// False when PICO-8 failed to start: the cart never played.
+        pub played: bool,
+    }
+
+    /// The last PICO-8 that was left to quit on its own while slot went on.
+    static QUITTING: std::sync::Mutex<Option<std::thread::JoinHandle<()>>> =
+        std::sync::Mutex::new(None);
+
+    /// Whether the PICO-8 slot last left to quit is still running.
+    pub fn still_quitting() -> bool {
+        QUITTING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|h| !h.is_finished())
+    }
+
+    /// Waits for a PICO-8 still quitting from the last game, so two never
+    /// run at once.
+    fn wait_for_the_last() {
+        let last = QUITTING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(last) = last {
+            let _ = last.join();
+        }
+    }
+
+    /// Lets PICO-8 finish quitting while slot carries on: it was told to,
+    /// and is killed if it is still there after `QUIT_GRACE`.
+    fn leave_quitting(mut child: Child, since: Instant) {
+        let reaper = std::thread::Builder::new()
+            .name("slot-pico8-quit".into())
+            .spawn(move || {
+                loop {
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            eprintln!(
+                                "slot: pico8: quit {:?} after it was told, exited {}",
+                                since.elapsed(),
+                                status.code().unwrap_or(-1)
+                            );
+                            return;
+                        }
+                        Ok(None) if since.elapsed() > QUIT_GRACE => {
+                            eprintln!("slot: pico8: did not quit, killing it");
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            return;
+                        }
+                        Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+                        Err(e) => {
+                            eprintln!("slot: pico8: {e}");
+                            return;
+                        }
+                    }
+                }
+            });
+        match reaper {
+            Ok(handle) => {
+                *QUITTING
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(handle);
+            }
+            Err(e) => eprintln!("slot: pico8: {e}"),
+        }
+    }
+
+    /// Time since slot started, to line the runner's steps up with slot's.
+    fn at() -> String {
+        format!("{:.1} ms", crate::boot_time::ms())
+    }
+
     const DEV: &str = "/dev/input";
     const SYS: &str = "/sys/class/input";
     const QUIT_GRACE: Duration = Duration::from_secs(3);
@@ -1154,6 +1241,8 @@ mod runner {
     const BBS_TIMEOUT: Duration = Duration::from_secs(15);
 
     /// `slot --pico8`: runs what slot asked for in `$SLOT_RUN/slot.next`.
+    /// slot hands PICO-8 the device itself now; this is for a slot that
+    /// cannot, and exits instead.
     pub fn run(root: &Path, run: &Path) -> i32 {
         let Some(launch) = read_next(run) else {
             eprintln!(
@@ -1162,6 +1251,33 @@ mod runner {
             );
             return 2;
         };
+        match play(root, run, &launch, Window::Own).played {
+            true => 0,
+            false => 1,
+        }
+    }
+
+    /// Plays `launch` on the owner's PICO-8 and returns once the screen is
+    /// slot's again. In a lent window, a cart PICO-8 is still quitting is
+    /// left to finish on its own: slot ejects the cart meanwhile.
+    pub fn play(root: &Path, run: &Path, launch: &Launch, window: Window) -> Ended {
+        wait_for_the_last();
+        eprintln!("slot: pico8: playing at {}", at());
+        let (mut overlay, lent) = match window {
+            Window::Own => (None, false),
+            Window::Lent(o) => (Some(o), true),
+        };
+        let played = play_in(root, run, launch, &mut overlay, lent);
+        Ended { overlay, played }
+    }
+
+    fn play_in(
+        root: &Path,
+        run: &Path,
+        launch: &Launch,
+        overlay: &mut Option<Overlay>,
+        lent: bool,
+    ) -> bool {
         let (binary, arch) = match unpack(root) {
             Ok(Some(found)) => found,
             Ok(None) => {
@@ -1169,11 +1285,11 @@ mod runner {
                     "slot: pico8: no PICO-8 in {}; copy the Raspberry Pi zip there",
                     install_dir(root).display()
                 );
-                return 1;
+                return false;
             }
             Err(e) => {
                 eprintln!("slot: pico8: unpack: {e}");
-                return 1;
+                return false;
             }
         };
         for dir in [home_dir(root), carts_dir(root), screenshots_dir(root)] {
@@ -1205,7 +1321,7 @@ mod runner {
             }
             None => volume(&state, headphones),
         };
-        let line = command_line(root, &binary, arch, &launch, volume, runs_directly(&binary));
+        let line = command_line(root, &binary, arch, launch, volume, runs_directly(&binary));
         eprintln!("slot: pico8: {}", line.join(" "));
         let install = binary.parent().unwrap_or(root).to_path_buf();
         let mut command = Command::new(&line[0]);
@@ -1237,17 +1353,16 @@ mod runner {
             Err(e) => eprintln!("slot: pico8: no wget for Splore: {e}"),
         }
         // slot handed over with the cart seated in the slot, and that frame is
-        // still on screen. Leaving PICO-8 powers off into it, and slot starts
-        // again on it to eject the cart, so there is no black between them.
+        // still on screen. Leaving PICO-8 powers off into it, and slot ejects
+        // the cart from it, so there is no black between them.
         let seated = Still::take();
-        // The menu and the HUD draw with slot's own window, opened before
+        // The menu and the HUD draw with slot's own window, open before
         // PICO-8 opens its own, as slot's is when it hands over.
-        let overlay = match shared.is_some() {
-            true => Overlay::open()
+        if overlay.is_none() && shared.is_some() {
+            *overlay = Overlay::open()
                 .map_err(|e| eprintln!("slot: pico8: no window for the menu: {e}"))
-                .ok(),
-            false => None,
-        };
+                .ok();
+        }
         let wifi = match launch {
             Launch::Splore => Wifi::up(root, run),
             Launch::Cart(_) => Wifi::Untouched,
@@ -1257,9 +1372,19 @@ mod runner {
             Err(e) => {
                 eprintln!("slot: pico8: {}: {e}", line[0]);
                 wifi.down(root);
-                return 1;
+                return false;
             }
         };
+        eprintln!("slot: pico8: started at {}", at());
+        // The cart's mouth for the menu, built while PICO-8 starts rather
+        // than when the menu is asked for.
+        if let Some(o) = overlay.as_mut() {
+            o.seat(root, &state);
+        }
+        // A cart PICO-8 is still quitting is left to finish while slot
+        // ejects it. Splore is waited for: what it downloaded goes on the
+        // shelf once it is done.
+        let leave = lent && matches!(launch, Launch::Cart(_));
         let code = watch(
             &mut child,
             keymap,
@@ -1269,11 +1394,20 @@ mod runner {
             shared.as_ref(),
             overlay,
             seated,
+            leave,
         );
         platform.set_backlight(state.brightness + 1);
+        match code {
+            Some(code) => eprintln!("slot: pico8: exited {code} at {}", at()),
+            None => {
+                eprintln!("slot: pico8: back to slot at {}, PICO-8 still quitting", at());
+                leave_quitting(child, Instant::now());
+            }
+        }
         // Carts favourited in Splore go on the shelf while the network is
-        // still up for the ones Splore never downloaded.
-        if launch == Launch::Splore {
+        // still up for the ones Splore never downloaded. slot scans the
+        // shelf again once it has the device back.
+        if *launch == Launch::Splore {
             let agent = crate::update::agent(BBS_TIMEOUT);
             let added = shelve_favourites(root, |id| fetch_bbs(&agent, id));
             if added > 0 {
@@ -1281,8 +1415,7 @@ mod runner {
             }
         }
         wifi.down(root);
-        eprintln!("slot: pico8: exited {code}");
-        0
+        true
     }
 
     /// Writes the `wget` script into `$SLOT_RUN`, which unlike the card
@@ -1356,6 +1489,10 @@ mod runner {
     /// again. Closing the lid of a clamshell does the same until it opens.
     /// The volume keys and the brightness shortcuts work as in slot, with
     /// slot's HUD over the game, when `shared` reaches the shim.
+    ///
+    /// Returns PICO-8's exit code, or `None` when `leave` let slot have the
+    /// screen back while PICO-8 was still quitting.
+    #[allow(clippy::too_many_arguments)]
     fn watch(
         child: &mut Child,
         keymap: Keymap,
@@ -1363,9 +1500,10 @@ mod runner {
         root: &Path,
         state: &mut slot_store::SlotState,
         shared: Option<&Shared>,
-        mut overlay: Option<Overlay>,
+        overlay: &mut Option<Overlay>,
         seated: Option<Still>,
-    ) -> i32 {
+        leave: bool,
+    ) -> Option<i32> {
         let nodes: Vec<PathBuf> = keymap.pick_devices(Path::new(DEV), Path::new(SYS));
         let files: Vec<File> = nodes.iter().filter_map(|n| File::open(n).ok()).collect();
         for f in &files {
@@ -1424,7 +1562,13 @@ mod runner {
                     },
                     (_, None) => blank_screen(),
                 }
-                return status.code().unwrap_or(-1);
+                return Some(status.code().unwrap_or(-1));
+            }
+            if let (Some(_), true) = (quitting, leave) {
+                if unsaved.is_some() {
+                    save_state(root, state);
+                }
+                return None;
             }
             if let Some(at) = quitting {
                 if at.elapsed() > QUIT_GRACE {
@@ -1488,7 +1632,7 @@ mod runner {
             }
             if sleep.asleep || quitting.is_some() {
                 if let Some(s) = shared {
-                    update_hud(&mut hud, &mut hud_drawn, &mut overlay, s, now);
+                    update_hud(&mut hud, &mut hud_drawn, overlay, s, now);
                 }
                 continue;
             }
@@ -1512,12 +1656,18 @@ mod runner {
                 match menu.act(action) {
                     Step::Nothing => {}
                     Step::Open => {
+                        let asked = Instant::now();
                         stop(sleep.pid);
                         sleep.held = true;
+                        let stopped = asked.elapsed();
                         saved = Saved::settled();
+                        eprintln!(
+                            "slot: pico8: menu: stopped in {stopped:?}, screen copied in {:?}",
+                            asked.elapsed() - stopped
+                        );
                         if overlay.is_none() {
                             match Overlay::open() {
-                                Ok(o) => overlay = Some(o),
+                                Ok(o) => *overlay = Some(o),
                                 Err(e) => eprintln!("slot: pico8: menu: {e}"),
                             }
                         }
@@ -1537,9 +1687,14 @@ mod runner {
                         o.set_backdrop(s);
                         o.seat(root, state);
                         o.set_status(platform.battery(), &clock_text(state));
+                        let ready = asked.elapsed();
                         if let Some(row) = menu.row() {
                             o.show(row, &hidden);
                         }
+                        eprintln!(
+                            "slot: pico8: menu: first frame at {ready:?}, open at {:?}",
+                            asked.elapsed()
+                        );
                     }
                     Step::Moved => {
                         if let (Some(o), Some(row)) = (overlay.as_mut(), menu.row()) {
@@ -1566,7 +1721,7 @@ mod runner {
                         unsafe { libc::kill(sleep.pid, libc::SIGCONT) };
                     }
                     Step::Quit => {
-                        eprintln!("slot: pico8: back to slot");
+                        eprintln!("slot: pico8: back to slot, asked at {}", at());
                         // The frame to power off: the one under the menu, or,
                         // leaving straight from the game, the one on screen,
                         // with PICO-8 stopped so it stays put meanwhile.
@@ -1599,7 +1754,7 @@ mod runner {
                 }
             }
             if let Some(s) = shared {
-                update_hud(&mut hud, &mut hud_drawn, &mut overlay, s, now);
+                update_hud(&mut hud, &mut hud_drawn, overlay, s, now);
             }
         }
     }

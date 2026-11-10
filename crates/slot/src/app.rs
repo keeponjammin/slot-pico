@@ -78,6 +78,12 @@ pub(crate) const POWER_OFF_S: f32 = 0.16;
 pub const HAND_OFF_AT: f32 = INSERT_S;
 
 const FOOTER_SLIDE_S: f32 = POWER_ON_S;
+
+/// How long before the eject a cart given back by a program still quitting
+/// waits in the slot once it has quit: slot's sound device takes a fifth of
+/// a second to open again after that program lets it go, and the eject's
+/// click would be lost before.
+const OUTSIDE_HOLD_S: f32 = 0.3;
 const GIFT_REACH: i32 = 4;
 
 const BLANK_WARM_S: f32 = 1.5;
@@ -625,6 +631,12 @@ pub struct App {
     link_transport: Option<(u16, Box<dyn LinkChannel>)>,
     restarting: bool,
     relaunching: bool,
+    /// What slot hands the device to next, set once the seated cart is held
+    /// in the slot: the frontend runs it and calls `back_from_outside`.
+    outside: Option<crate::pico8::Launch>,
+    /// The program slot handed the device to has given it back but is still
+    /// quitting, holding the sound device: the cart waits in the slot.
+    outside_quitting: bool,
     repairing: bool,
     repair_prompt: bool,
     reset_prompt: Option<QuickRow>,
@@ -1128,6 +1140,8 @@ impl App {
             link_transport: None,
             restarting: false,
             relaunching: false,
+            outside: None,
+            outside_quitting: false,
             repairing: false,
             repair_prompt: false,
             reset_prompt: None,
@@ -4917,6 +4931,87 @@ impl App {
         self.relaunching
     }
 
+    /// What slot is handing the device to, once the seated cart is held in
+    /// the slot. slot keeps running meanwhile, stopped on that frame.
+    pub fn handing_off(&self) -> Option<&crate::pico8::Launch> {
+        self.outside.as_ref()
+    }
+
+    /// Takes what to hand the device to, for the frontend to run.
+    pub fn take_hand_off(&mut self) -> Option<crate::pico8::Launch> {
+        self.outside.take()
+    }
+
+    /// Whether the program slot handed the device to is still quitting. The
+    /// cart it gave back stays in the slot until it has, so the eject's click
+    /// is not lost while that program still has the sound device.
+    pub fn set_outside_quitting(&mut self, quitting: bool) {
+        self.outside_quitting = quitting;
+    }
+
+    /// Hands off the old way, for a frontend that cannot run the program
+    /// itself: leaves what to run for the launcher and exits, and the
+    /// launcher starts slot again after, which ejects the cart.
+    pub fn hand_off_by_relaunch(&mut self, launch: &crate::pico8::Launch) {
+        let written = std::env::var_os(crate::loading_mark::RUN_VAR)
+            .ok_or_else(|| format!("no {} to hand off through", crate::loading_mark::RUN_VAR))
+            .and_then(|run| {
+                crate::pico8::write_next(std::path::Path::new(&run), launch)
+                    .map_err(|e| e.to_string())
+            });
+        match written {
+            Ok(()) => self.relaunching = true,
+            Err(e) => {
+                eprintln!("slot: pico8: {e}");
+                self.back_from_outside();
+            }
+        }
+    }
+
+    /// The program slot handed the device to has given it back, with the
+    /// seated cart on screen as slot left it: pick up the levels it may have
+    /// changed, and eject the cart onto the shelf, as slot does when it
+    /// starts again after one.
+    pub fn back_from_outside(&mut self) {
+        self.outside = None;
+        // The frame that handed off had just begun to light the screen; the
+        // one on screen is the seated cart before that, as slot left it.
+        self.screen = 0.0;
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        let disk = read_slot_state(&root);
+        self.state.volume = disk.volume;
+        self.state.volume_hp = disk.volume_hp;
+        self.state.muted = disk.muted;
+        self.state.muted_hp = disk.muted_hp;
+        self.state.brightness = disk.brightness;
+        self.state.dim = disk.dim;
+        if let Some(power) = &mut self.power {
+            power.set_backlight(self.state.brightness + 1);
+        }
+        let Some(cart) = self.seated_cart().cloned() else {
+            self.phase = Phase::Shelf;
+            return;
+        };
+        // Splore may have put carts favourited there on the shelf.
+        if crate::pico8::is_splore(&cart.rom) {
+            crate::pico8::write_labels(&root);
+            if let Ok(carts) = scan(&root) {
+                self.adopt_rescan(carts);
+            }
+        }
+        match self.shelf().carts.iter().position(|c| c.stem == cart.stem && c.platform == cart.platform) {
+            Some(i) => self.eject_on_return(i),
+            None => {
+                self.phase = Phase::Ejecting {
+                    cart: cart.stem,
+                    t: -EJECT_HOLD_S,
+                }
+            }
+        }
+    }
+
     pub fn restart(&mut self) {
         self.settle_saves();
         if let Some(power) = &mut self.power {
@@ -6357,6 +6452,7 @@ impl App {
         let at = self.shelf_at;
         let fly = self.ds_fly_rates();
         let clicks = self.cart_clicks();
+        let held = self.outside_quitting;
         let next = match &mut self.phase {
             Phase::Shelf => {
                 let shelf = &mut self.shelves[at].1;
@@ -6393,6 +6489,9 @@ impl App {
                         true => dt * fly.1,
                         false => dt,
                     };
+                    if held && was <= -OUTSIDE_HOLD_S {
+                        *t = t.min(-OUTSIDE_HOLD_S);
+                    }
                     let at = clicks.2 - clicks.1.lead() * fly.1;
                     touched = was < at && *t >= at;
                 }
@@ -9503,7 +9602,7 @@ impl App {
     /// A cart that runs outside slot plays the insert like any other: once it is seated and
     /// held, slot hands the device over, leaving that frame on screen while the program starts.
     fn hand_off_when_seated(&mut self) {
-        if self.relaunching {
+        if self.relaunching || self.outside.is_some() {
             return;
         }
         let ready = matches!(
@@ -9515,34 +9614,27 @@ impl App {
         }
     }
 
-    /// PICO-8 runs as its own program: leave what to run for the launcher,
-    /// remember where the shelf was and that the cart is in the slot, and exit
-    /// so the launcher can run it and start slot again after, which ejects it.
+    /// PICO-8 runs as its own program: remember where the shelf was and that
+    /// the cart is in the slot, so slot starting after a crash or a power cut
+    /// ejects it, and leave what to run for the frontend. slot stays up,
+    /// stopped on the seated cart, while PICO-8 has the device.
     fn hand_off(&mut self) {
         self.play_held = None;
         let Some(cart) = self.seated_cart().cloned() else {
             return;
         };
-        let written = std::env::var_os(crate::loading_mark::RUN_VAR)
-            .ok_or_else(|| format!("no {} to hand off through", crate::loading_mark::RUN_VAR))
-            .and_then(|run| {
-                let launch = crate::pico8::launch_for(&cart.rom);
-                crate::pico8::write_next(std::path::Path::new(&run), &launch)
-                    .map_err(|e| e.to_string())
-            });
-        if let Err(e) = written {
-            eprintln!("slot: pico8: {e}");
-            let caught = self.seat();
-            return self.refuse_out(cart.stem, caught);
-        }
-        eprintln!("slot: pico8: handing off {}", cart.stem);
+        eprintln!(
+            "slot: pico8: handing off {} at {:.1} ms",
+            cart.stem,
+            crate::boot_time::ms()
+        );
         self.stop_romm();
         self.remember_shelf();
         self.state.played(cart.platform, &cart.stem);
         self.state.cart = Some(cart.stem);
         self.state.cart_platform = Some(cart.platform);
         self.persist();
-        self.relaunching = true;
+        self.outside = Some(crate::pico8::launch_for(&cart.rom));
     }
 
     pub fn starting_clean(&self) -> bool {

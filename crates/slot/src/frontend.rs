@@ -1466,6 +1466,36 @@ impl Frontend {
         self.stop();
     }
 
+    /// What slot is handing the device to, now that the seated cart is held
+    /// in the slot. slot's sound is let go meanwhile: the device takes a
+    /// quarter of a second to close, and PICO-8 wants it a second later.
+    pub fn take_hand_off(&mut self) -> Option<crate::pico8::Launch> {
+        let launch = self.session.app_mut().take_hand_off()?;
+        self.session.close_audio_soon();
+        Some(launch)
+    }
+
+    /// The device is slot's again. The presses made while it was not are
+    /// dropped, though slot learns which buttons are still down, and time
+    /// picks up from now rather than jumping over the game.
+    pub fn back_from_outside(&mut self, input: &mut dyn InputSource) {
+        let stale = input.poll(self.now());
+        self.session.observe(stale);
+        self.session.reopen_audio();
+        self.last = Instant::now();
+        self.session.app_mut().back_from_outside();
+    }
+
+    /// Whether the program slot handed the device to is still quitting.
+    pub fn set_outside_quitting(&mut self, quitting: bool) {
+        self.session.app_mut().set_outside_quitting(quitting);
+    }
+
+    /// Hands off by exiting, for a frontend that cannot run the program.
+    pub fn hand_off_by_relaunch(&mut self, launch: &crate::pico8::Launch) {
+        self.session.app_mut().hand_off_by_relaunch(launch);
+    }
+
     pub fn repairing(&self) -> bool {
         self.session.app().ready_to_repair()
     }
