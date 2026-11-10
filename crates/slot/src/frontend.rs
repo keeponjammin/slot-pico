@@ -1566,6 +1566,7 @@ impl UiFaces {
             quick_labels: QuickRow::ALL
                 .iter()
                 .map(|r| [false, true].map(|lit| quick_label_face(*r, lit)))
+                .chain(slot_ui::pico8_label_faces())
                 .collect(),
             quick_pointer: quick_pointer_face(),
             quick_values: QuickValue::ALL

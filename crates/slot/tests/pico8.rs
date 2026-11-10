@@ -680,28 +680,8 @@ fn pico8_never_wears_the_game_boy_colors_bezel_or_overlay() {
 #[test]
 fn the_in_game_menu_opens_over_a_fake08_cart_on_every_row() {
     let d = TempDir::new().unwrap();
-    write_cart(d.path(), "celeste.p8", b"");
-    slot::root::ensure(d.path());
-    std::fs::write(d.path().join("Games/GBA/Emerald.gba"), [0u8; 512]).unwrap();
-    common::clocked(d.path());
-    let mut state = slot_store::read_slot_state(d.path());
-    state.cart = Some("celeste".into());
-    state.cart_platform = Some(Platform::Pico8);
-    state.clock_set = true;
-    slot_store::write_slot_state(d.path(), &state).unwrap();
-    let mut a = App::boot(d.path());
-    for _ in 0..600 {
-        a.on_core_ready();
-        a.update(1.0 / 60.0);
-        if matches!(a.phase(), Phase::Playing { .. }) {
-            break;
-        }
-    }
-    assert!(
-        matches!(a.phase(), Phase::Playing { cart } if cart == "celeste"),
-        "{:?}",
-        a.phase()
-    );
+    let (mut a, _turn) = playing_on_fake08(d.path());
+    assert!(matches!(a.phase(), Phase::Playing { cart } if cart == "celeste"));
     a.apply(slot_input::Action::QuickMenu);
     for _ in 0..30 {
         a.update(1.0 / 60.0);
@@ -770,4 +750,89 @@ fn pico8_keeps_its_own_screen_settings_apart_from_the_game_boy_colors() {
         false,
         "PICO-8 has no select button"
     );
+}
+
+/// A PICO-8 cart playing on fake-08 (the mock core stands in for it here). Holds the
+/// `SLOT_RUN` turn, so no other test's loading mark lands in this one's run folder.
+fn playing_on_fake08(root: &Path) -> (App, std::sync::MutexGuard<'static, ()>) {
+    let turn = hand_off_through(&root.join("run"));
+    write_cart(root, "celeste.p8", b"");
+    slot::root::ensure(root);
+    std::fs::write(root.join("Games/GBA/Emerald.gba"), [0u8; 512]).unwrap();
+    common::clocked(root);
+    let mut state = slot_store::read_slot_state(root);
+    state.cart = Some("celeste".into());
+    state.cart_platform = Some(Platform::Pico8);
+    state.clock_set = true;
+    slot_store::write_slot_state(root, &state).unwrap();
+    let mut a = App::boot(root);
+    for _ in 0..600 {
+        a.on_core_ready();
+        a.update(1.0 / 60.0);
+        if matches!(a.phase(), Phase::Playing { .. }) {
+            break;
+        }
+    }
+    assert!(matches!(a.phase(), Phase::Playing { .. }), "{:?}", a.phase());
+    (a, turn)
+}
+
+fn press(a: &mut App, btn: Btn) {
+    a.apply(slot_input::Action::GbaDown(btn));
+    a.apply(slot_input::Action::GbaUp(btn));
+    a.update(1.0 / 60.0);
+}
+
+fn down_to(a: &mut App, row: slot_ui::QuickRow) {
+    for _ in 0..20 {
+        if a.in_game_menu() == Some(row) {
+            return;
+        }
+        press(a, Btn::Down);
+    }
+    panic!("never reached {row:?}, on {:?}", a.in_game_menu());
+}
+
+#[test]
+fn pico8s_buttons_go_by_its_own_names_in_the_in_game_menu() {
+    use slot_ui::{QuickMenuFaces, QuickRow, TexId};
+    let d = TempDir::new().unwrap();
+    let (mut a, _turn) = playing_on_fake08(d.path());
+    let id = TexId::from_raw;
+    let own = QuickRow::ALL.len();
+    a.set_quick_menu_faces(QuickMenuFaces {
+        labels: (0..own + QuickRow::PICO8_NAMED.len())
+            .map(|i| [(id(10_000 + 2 * i), 80, 40), (id(10_001 + 2 * i), 80, 40)])
+            .collect(),
+        pointer: (id(700), 16, 40),
+        values: Vec::new(),
+        legend: [(id(400), 70); 8],
+        legend_light: [(id(400), 70); 8],
+        descriptions: [(id(410), 300, 44), (id(411), 340, 44)],
+    });
+    a.apply(slot_input::Action::QuickMenu);
+    for _ in 0..30 {
+        a.update(1.0 / 60.0);
+    }
+    down_to(&mut a, QuickRow::Settings);
+    press(&mut a, Btn::A);
+    down_to(&mut a, QuickRow::PlayControls);
+    press(&mut a, Btn::A);
+    down_to(&mut a, QuickRow::GameA);
+    let mut out = Vec::new();
+    a.draw(&mut out);
+    let drawn = |tex: TexId| {
+        out.iter()
+            .any(|d| matches!(d, slot_ui::Draw::Tex { tex: t, .. } if *t == tex))
+    };
+    let lit = |i: usize| id(10_001 + 2 * i);
+    let dim = |i: usize| id(10_000 + 2 * i);
+    assert_eq!(QuickRow::GameA.pico8_label(), Some("X Button"));
+    assert_eq!(QuickRow::GameB.pico8_label(), Some("O Button"));
+    assert_eq!(QuickRow::GameStart.pico8_label(), Some("Pause"));
+    assert!(drawn(lit(own)), "the core's A is not called X on PICO-8");
+    assert!(drawn(dim(own + 1)), "the core's B is not called O on PICO-8");
+    assert!(drawn(dim(own + 2)), "Start is not called Pause on PICO-8");
+    assert!(!drawn(lit(QuickRow::GameA.index())), "A still goes by the Game Boy's name");
+    assert!(!drawn(dim(QuickRow::GameSelect.index())), "PICO-8 has no select");
 }
