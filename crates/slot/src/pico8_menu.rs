@@ -139,10 +139,11 @@ mod screen {
 
     use slot_gfx::{Canvas, Compositor, Draw, FbdevSurface, Surface, TexId};
     use slot_input::Millis;
+    use slot_store::{Cart, Platform, SlotState};
     use slot_ui::{
         footer_ink, icon_face, quick_label_face, quick_legend_faces, quick_pointer_face, Hud, Icon,
-        QuickMenu, QuickMenuFaces, QuickRow, UndoFace, HINT_EDGE, HUD_ICON_PX, HUD_INK, MOUTH_H,
-        PLATE_H,
+        QuickMenu, QuickMenuFaces, QuickRow, SlotChrome, UndoFace, HINT_EDGE, HUD_ICON_PX, HUD_INK,
+        MOUTH_H, PLATE_H,
     };
 
     use crate::panel_turn::{panel_turn, PanelTurn};
@@ -216,6 +217,15 @@ mod screen {
         unsafe { libc::ioctl(fd.as_raw_fd(), EVIOCGRAB as _, libc::c_int::from(on)) };
     }
 
+    /// The cart PICO-8 is running, seated in slot's mouth along the bottom of
+    /// the menu, as slot shows a seated cart under its menu over any game.
+    struct Mouth {
+        cart: Cart,
+        face: TexId,
+        behind: [Option<TexId>; 2],
+        slot: (TexId, TexId),
+    }
+
     /// slot's own window on the screen, opened the first time the menu is.
     pub struct Overlay {
         // Fields drop in this order: the compositor's GL objects need the
@@ -232,6 +242,7 @@ mod screen {
         /// The tint the shim gave PICO-8's frames, taken off the backdrop
         /// so the compositor's grade puts it on once, as in slot.
         tint: [f32; 3],
+        mouth: Option<Mouth>,
     }
 
     impl Overlay {
@@ -270,6 +281,7 @@ mod screen {
                 backdrop: None,
                 show_backdrop: false,
                 tint: [1.0; 3],
+                mouth: None,
             })
         }
 
@@ -334,6 +346,50 @@ mod screen {
             }
         }
 
+        /// Seats the cart slot handed to PICO-8 in the mouth under the menu:
+        /// its face, the plastic behind a clear one, and the slot in slot's
+        /// light or dark. Built once, the first time the menu opens. Without
+        /// the cart, the menu goes on without the mouth.
+        pub fn seat(&mut self, root: &std::path::Path, state: &SlotState) {
+            if self.mouth.is_some() {
+                return;
+            }
+            let Some(stem) = state.cart.as_deref() else {
+                return;
+            };
+            let cart = slot_store::scan_platform(root, Platform::Pico8)
+                .ok()
+                .and_then(|carts| carts.into_iter().find(|c| c.stem == stem));
+            let Some(cart) = cart else {
+                eprintln!("slot: pico8: menu: {stem} is not on the shelf, no mouth");
+                return;
+            };
+            let c = &mut self.compositor;
+            let mut up = |f: slot_ui::CartFace| c.create_texture(f.w, f.h, &f.rgba);
+            let face = up(slot_ui::cart_face(&cart));
+            let behind = match slot_ui::shows_interior(&cart) {
+                true => [
+                    Some(up(slot_ui::cart_interior(&cart))),
+                    Some(up(slot_ui::cart_backing(slot_ui::shelf_shape(&cart).0))),
+                ],
+                false => [None, None],
+            };
+            let (back, front) = match state.appearance.light() {
+                true => (slot_ui::slot_back_light(), slot_ui::slot_front_light()),
+                false => (slot_ui::slot_back(), slot_ui::slot_front()),
+            };
+            let slot = (
+                c.create_texture(slot_ui::SLOT_W, slot_ui::SLOT_H, back),
+                c.create_texture(slot_ui::SLOT_W, slot_ui::SLOT_H, front),
+            );
+            self.mouth = Some(Mouth {
+                cart,
+                face,
+                behind,
+                slot,
+            });
+        }
+
         pub fn draw(&mut self, row: QuickRow, hidden: &[QuickRow]) {
             let canvas = Canvas::of(self.window);
             let mut out = Vec::new();
@@ -370,10 +426,32 @@ mod screen {
                 bound: None,
                 description: None,
                 over_game: self.show_backdrop,
-                footer_top: canvas.h,
+                // With the cart seated, the menu's shade stops where the mouth begins, as in slot.
+                footer_top: match self.mouth {
+                    Some(_) => canvas.h - MOUTH_H,
+                    None => canvas.h,
+                },
                 canvas,
             }
             .draw(&mut out);
+            if let Some(m) = &self.mouth {
+                SlotChrome {
+                    cart: &m.cart,
+                    face: Some(m.face),
+                    rest: 0.0,
+                    scale: 1.0,
+                    seat: 1.0,
+                    alert: None,
+                    dim: 0.0,
+                    screen: 0.0,
+                    game: false,
+                    over: true,
+                    behind: m.behind,
+                    slot: Some(m.slot),
+                    canvas,
+                }
+                .draw(&mut out);
+            }
             let [_, _, open, resume, ..] = self.faces.legend;
             let y = canvas.h - MOUTH_H;
             for (face, right) in [(resume, false), (open, true)] {

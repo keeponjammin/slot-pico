@@ -72,6 +72,15 @@ pub const POWER_ON_S: f32 = 0.22;
 
 const POWER_OFF_S: f32 = 0.16;
 
+/// How long a PICO-8 cart's screen stays dark after powering on before slot
+/// hands the device over, so the hand-off never lands mid-fade.
+const HAND_OFF_HOLD_S: f32 = 0.12;
+/// The longest step the fade out of the dark takes after slot comes back: one frame.
+const RETURN_FADE_STEP_S: f32 = 1.0 / 60.0;
+/// When slot hands PICO-8 the device: the cart seated, the screen powered on
+/// into PICO-8's black, and a breath of dark after.
+pub const HAND_OFF_AT: f32 = INSERT_S + POWER_ON_S + HAND_OFF_HOLD_S;
+
 const FOOTER_SLIDE_S: f32 = POWER_ON_S;
 const GIFT_REACH: i32 = 4;
 
@@ -617,6 +626,10 @@ pub struct App {
     link_transport: Option<(u16, Box<dyn LinkChannel>)>,
     restarting: bool,
     relaunching: bool,
+    /// slot has just come back from a program it handed a cart to. Until the screen is out of
+    /// the dark, each step of the fade is at most a frame long: the first steps after boot
+    /// span starting up and the first, slow render, and would skip the fade outright.
+    dark_return: bool,
     repairing: bool,
     repair_prompt: bool,
     reset_prompt: Option<QuickRow>,
@@ -1114,6 +1127,7 @@ impl App {
             link_transport: None,
             restarting: false,
             relaunching: false,
+            dark_return: false,
             repairing: false,
             repair_prompt: false,
             reset_prompt: None,
@@ -1304,6 +1318,11 @@ impl App {
         };
         self.phase = Phase::Shelf;
         match seated {
+            Some((at, i)) if self.shelves[at].1.carts[i].platform.runs_outside() => {
+                self.shelf_at = at;
+                self.shelf_mut().select(i);
+                self.eject_on_return(i);
+            }
             Some((at, i)) => {
                 self.shelf_at = at;
                 self.shelf_mut().select(i);
@@ -1319,6 +1338,20 @@ impl App {
                 self.name_pending = true;
             }
         }
+    }
+
+    /// slot starts again after a program it handed a cart to quits: the screen is still dark
+    /// from it, so it fades back out and the cart comes out of the slot onto the shelf.
+    fn eject_on_return(&mut self, i: usize) {
+        let cart = self.shelf().carts[i].clone();
+        eprintln!("slot: {} came back from {}, ejecting", cart.stem, cart.platform.name());
+        self.seated_platform = Some(cart.platform);
+        self.screen = 1.0;
+        self.dark_return = true;
+        self.phase = Phase::Ejecting {
+            cart: cart.stem,
+            t: -EJECT_HOLD_S,
+        };
     }
 
     fn start_after_a_crash(&mut self, stem: &str) {
@@ -3148,6 +3181,11 @@ impl App {
     }
 
     pub fn resolved_bezel(&self, platform: Platform) -> BezelPick {
+        // A program slot hands the device to draws its own whole screen: nothing goes around it,
+        // not even while its screen powers on.
+        if platform.runs_outside() {
+            return BezelPick::None;
+        }
         let pick = match platform {
             Platform::Gba | Platform::Gbav => &self.state.bezel_gba,
             #[cfg(feature = "nds")]
@@ -3214,6 +3252,9 @@ impl App {
     }
 
     pub fn resolved_overlay(&self, platform: Platform) -> Option<slot_store::OverlayEntry> {
+        if platform.runs_outside() {
+            return None;
+        }
         let pick = match platform {
             Platform::Gba | Platform::Gbav => &self.state.overlay_gba,
             #[cfg(feature = "nds")]
@@ -6288,9 +6329,14 @@ impl App {
         }
         self.step_screen(dt);
         self.step_footer(dt);
+        self.hand_off_when_lit();
     }
 
     fn step_screen(&mut self, dt: f32) {
+        let dt = match self.dark_return {
+            true => dt.min(RETURN_FADE_STEP_S),
+            false => dt,
+        };
         self.blank_s = match self.blank_panel() {
             Some(_) => self.blank_s + dt,
             None => 0.0,
@@ -6303,6 +6349,7 @@ impl App {
             -dt / POWER_OFF_S
         };
         self.screen = (self.screen + step).clamp(0.0, 1.0);
+        self.dark_return &= self.screen > 0.0;
         let docked = matches!(
             self.phase,
             Phase::Shelf | Phase::Inserting { .. } | Phase::Ejecting { .. }
@@ -6481,6 +6528,7 @@ impl App {
         }
         let lit = match self.playing_platform() {
             Platform::Gb => [0x9b, 0xa5, 0x82],
+            Platform::Pico8 => [0, 0, 0],
             _ => [0xe6, 0xe4, 0xda],
         };
         let k = (self.blank_s / BLANK_WARM_S).min(1.0);
@@ -7535,7 +7583,26 @@ impl App {
         if let Some(menu) = self.game_menu {
             self.draw_game_menu(menu, out);
         }
+        self.draw_outside_dark(out);
         self.hud.draw(self.canvas(), self.now(), out);
+    }
+
+    /// A cart that runs outside slot powers its screen on into the dark the program starts in,
+    /// so the whole screen goes black as slot hands over, and comes back out of it when slot
+    /// returns and ejects the cart.
+    fn draw_outside_dark(&self, out: &mut Vec<Draw>) {
+        let outside = matches!(self.phase, Phase::Inserting { .. } | Phase::Ejecting { .. })
+            && self.seated_cart().is_some_and(|c| c.platform.runs_outside());
+        if !outside || self.screen <= 0.0 {
+            return;
+        }
+        out.push(Draw::Rect {
+            x: 0.0,
+            y: 0.0,
+            w: self.canvas().w,
+            h: self.canvas().h,
+            colour: [0.0, 0.0, 0.0, ease(self.screen)],
+        });
     }
 
     pub fn screen_shake(&self) -> f32 {
@@ -9269,8 +9336,8 @@ impl App {
         }) else {
             return;
         };
-        if platform.runs_outside() {
-            return self.hand_off(at);
+        if platform.runs_outside() && !self.can_hand_off(at) {
+            return self.refuse();
         }
         self.seated_platform = Some(platform);
         eprintln!(
@@ -9282,7 +9349,8 @@ impl App {
         self.refused_from = None;
         self.sunlight_manual = None;
         self.stop_romm();
-        if let Some(mark) = &self.loading {
+        // A cart slot hands off never loads a core here, so it cannot take slot down loading.
+        if let Some(mark) = self.loading.as_ref().filter(|_| !platform.runs_outside()) {
             mark.set(&cart);
             self.marked = true;
             self.playing_since = None;
@@ -9296,38 +9364,71 @@ impl App {
         };
     }
 
-    /// PICO-8 runs as its own program: leave what to run for the launcher,
-    /// remember where the shelf was, and exit so the launcher can run it and
-    /// start slot again after.
-    fn hand_off(&mut self, at: usize) {
-        self.play_held = None;
-        let Some(cart) = self.shelf().carts.get(at).cloned() else {
-            return;
+    /// Whether the cart at `at` can be handed to the program it runs in, checked before it is
+    /// inserted so a cart that cannot run is refused on the shelf, not after its animation.
+    fn can_hand_off(&self, at: usize) -> bool {
+        let Some(cart) = self.shelf().carts.get(at) else {
+            return false;
         };
-        let Some(root) = self.root.clone() else {
-            return;
+        let Some(root) = &self.root else {
+            return false;
         };
-        if !crate::pico8::installed(&root) {
+        if !crate::pico8::installed(root) {
             eprintln!(
                 "slot: pico8: no PICO-8 in {}, refusing {}",
-                crate::pico8::install_dir(&root).display(),
+                crate::pico8::install_dir(root).display(),
                 cart.stem
             );
-            return self.refuse();
+            return false;
         }
-        let Some(run) = std::env::var_os(crate::loading_mark::RUN_VAR) else {
+        if std::env::var_os(crate::loading_mark::RUN_VAR).is_none() {
             eprintln!("slot: pico8: no {} to hand off through", crate::loading_mark::RUN_VAR);
-            return self.refuse();
+            return false;
+        }
+        true
+    }
+
+    /// A cart that runs outside slot plays the insert like any other: once it is seated and
+    /// the screen has powered on into the dark, slot hands the device over.
+    fn hand_off_when_lit(&mut self) {
+        if self.relaunching {
+            return;
+        }
+        let ready = matches!(
+            self.phase,
+            Phase::Inserting { t, resumed: false, .. } if t >= HAND_OFF_AT
+        );
+        if ready && self.seated_cart().is_some_and(|c| c.platform.runs_outside()) {
+            self.hand_off();
+        }
+    }
+
+    /// PICO-8 runs as its own program: leave what to run for the launcher,
+    /// remember where the shelf was and that the cart is in the slot, and exit
+    /// so the launcher can run it and start slot again after, which ejects it.
+    fn hand_off(&mut self) {
+        self.play_held = None;
+        let Some(cart) = self.seated_cart().cloned() else {
+            return;
         };
-        let launch = crate::pico8::launch_for(&cart.rom);
-        if let Err(e) = crate::pico8::write_next(std::path::Path::new(&run), &launch) {
+        let written = std::env::var_os(crate::loading_mark::RUN_VAR)
+            .ok_or_else(|| format!("no {} to hand off through", crate::loading_mark::RUN_VAR))
+            .and_then(|run| {
+                let launch = crate::pico8::launch_for(&cart.rom);
+                crate::pico8::write_next(std::path::Path::new(&run), &launch)
+                    .map_err(|e| e.to_string())
+            });
+        if let Err(e) = written {
             eprintln!("slot: pico8: {e}");
-            return self.refuse();
+            let caught = self.seat();
+            return self.refuse_out(cart.stem, caught);
         }
         eprintln!("slot: pico8: handing off {}", cart.stem);
         self.stop_romm();
         self.remember_shelf();
         self.state.played(cart.platform, &cart.stem);
+        self.state.cart = Some(cart.stem);
+        self.state.cart_platform = Some(cart.platform);
         self.persist();
         self.relaunching = true;
     }

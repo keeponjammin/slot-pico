@@ -549,6 +549,10 @@ impl Session {
             Phase::Inserting { cart, .. } => cart.clone(),
             _ => return,
         };
+        // A cart that runs outside slot, like PICO-8, has no core: slot hands it over instead.
+        if self.app.seated_cart().is_some_and(|c| c.platform.runs_outside()) {
+            return;
+        }
         if self.emu.is_none() && self.opening.is_none() {
             let (_, serial) = self.app.link_mode(&stem);
             self.spawn_core(&stem, serial);
