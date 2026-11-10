@@ -3642,10 +3642,9 @@ impl App {
         }
     }
 
-    pub fn set_gb_cart_shadows(&mut self, notched: TexId, rounded: TexId) {
+    pub fn set_gb_cart_shadow(&mut self, shell: GbShell, face: TexId) {
         for (_, shelf) in &mut self.shelves {
-            shelf.set_gb_shadow(GbShell::Notched, notched);
-            shelf.set_gb_shadow(GbShell::Rounded, rounded);
+            shelf.set_gb_shadow(shell, face);
         }
     }
 
@@ -3655,10 +3654,9 @@ impl App {
         }
     }
 
-    pub fn set_gb_cart_backings(&mut self, notched: TexId, rounded: TexId) {
+    pub fn set_gb_cart_backing(&mut self, shell: GbShell, face: TexId) {
         for (_, shelf) in &mut self.shelves {
-            shelf.set_gb_backing(GbShell::Notched, notched);
-            shelf.set_gb_backing(GbShell::Rounded, rounded);
+            shelf.set_gb_backing(shell, face);
         }
     }
 

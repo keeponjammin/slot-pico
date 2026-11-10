@@ -46,6 +46,14 @@ pub const GBC_LABEL_Y: u32 = 110;
 pub const GBC_LABEL_W: u32 = 223;
 pub const GBC_LABEL_H: u32 = 199;
 
+/// The PICO-8 cart's label box: the square well drawn in `assets/pico8_neutral.png`, x 50..262,
+/// y 78..290 of 312x337. Square, as every PICO-8 label is. Keep in step with `LABEL` in
+/// `tools/pico8_cart.py`.
+pub const PICO8_LABEL_X: u32 = 50;
+pub const PICO8_LABEL_Y: u32 = 78;
+pub const PICO8_LABEL_W: u32 = 212;
+pub const PICO8_LABEL_H: u32 = 212;
+
 const PAD: u32 = 10;
 const MAX_LINES: usize = 3;
 const MIN_PX: f32 = 10.0;
@@ -68,8 +76,6 @@ struct Spec {
 enum Shape {
     Gba,
     Gb(GbShell),
-    /// A rounded pak embossed PICO-8 instead of GAME BOY COLOR.
-    Pico8,
     #[cfg(feature = "nds")]
     Ds,
 }
@@ -88,7 +94,7 @@ const DS_LABEL: (u32, u32, u32, u32) = (DS_LABEL_X, DS_LABEL_Y, DS_LABEL_W, DS_L
 pub fn folder_gb_shell(cart: &Cart) -> Option<GbShell> {
     match cart.platform {
         Platform::Gba | Platform::Gbav => None,
-        Platform::Pico8 => Some(GbShell::Rounded),
+        Platform::Pico8 => Some(GbShell::Pico8),
         #[cfg(feature = "nds")]
         Platform::Nds => None,
         Platform::Gb | Platform::Gbc => Some(match cart.shell.map(|c| c.outline) {
@@ -116,7 +122,7 @@ pub fn shelf_shape(cart: &Cart) -> (Option<GbShell>, bool) {
         (Platform::Gba | Platform::Gbav, _) => None,
         #[cfg(feature = "nds")]
         (Platform::Nds, _) => None,
-        (Platform::Pico8, _) => Some(GbShell::Rounded),
+        (Platform::Pico8, _) => Some(GbShell::Pico8),
         (_, Some(Outline::Notched)) => Some(GbShell::Notched),
         (_, Some(Outline::Rounded)) => Some(GbShell::Rounded),
         _ => match slot_store::header_index::peek_gb_header(&cart.rom).flatten() {
@@ -131,7 +137,7 @@ pub fn shelf_shape(cart: &Cart) -> (Option<GbShell>, bool) {
 pub fn gb_shell_of(cart: &Cart) -> Option<GbShell> {
     match cart.platform {
         Platform::Gba | Platform::Gbav => None,
-        Platform::Pico8 => Some(GbShell::Rounded),
+        Platform::Pico8 => Some(GbShell::Pico8),
         #[cfg(feature = "nds")]
         Platform::Nds => None,
         Platform::Gb | Platform::Gbc => Some(match cart.shell.map(|c| c.outline) {
@@ -160,9 +166,6 @@ pub fn label_rect(shell: Option<GbShell>) -> (f32, f32, f32, f32) {
 }
 
 fn shape_of(cart: &Cart) -> Shape {
-    if cart.platform == Platform::Pico8 {
-        return Shape::Pico8;
-    }
     #[cfg(feature = "nds")]
     if cart.platform == Platform::Nds {
         return Shape::Ds;
@@ -175,10 +178,6 @@ fn shape_of(cart: &Cart) -> Shape {
 
 fn spec(shape: Shape) -> Spec {
     match shape {
-        Shape::Pico8 => Spec {
-            mould: Mould::Pico8,
-            ..spec(Shape::Gb(GbShell::Rounded))
-        },
         Shape::Gba => Spec {
             w: CART_W,
             h: CART_H,
@@ -193,15 +192,18 @@ fn spec(shape: Shape) -> Spec {
             label: match shell {
                 GbShell::Notched => (GB_LABEL_X, GB_LABEL_Y, GB_LABEL_W, GB_LABEL_H),
                 GbShell::Rounded => (GBC_LABEL_X, GBC_LABEL_Y, GBC_LABEL_W, GBC_LABEL_H),
+                GbShell::Pico8 => (PICO8_LABEL_X, PICO8_LABEL_Y, PICO8_LABEL_W, PICO8_LABEL_H),
             },
             mask: gb_cart_mask(shell),
             mould: match shell {
                 GbShell::Notched => Mould::Notched,
                 GbShell::Rounded => Mould::Rounded,
+                GbShell::Pico8 => Mould::Pico8,
             },
             paint: match shell {
                 GbShell::Notched => bitmaps::gb_cart(),
                 GbShell::Rounded => bitmaps::gbc_cart(),
+                GbShell::Pico8 => bitmaps::pico8_cart(),
             },
         },
         #[cfg(feature = "nds")]
@@ -235,7 +237,7 @@ pub fn cart_box(platform: Platform) -> (u32, u32) {
         #[cfg(feature = "nds")]
         Platform::Nds => Shape::Ds,
         Platform::Gb | Platform::Gbc => Shape::Gb(GbShell::Notched),
-        Platform::Pico8 => Shape::Pico8,
+        Platform::Pico8 => Shape::Gb(GbShell::Pico8),
     });
     (s.w, s.h)
 }
@@ -283,6 +285,7 @@ pub fn cart_interior(cart: &Cart) -> CartFace {
             let src = match shell {
                 GbShell::Notched => bitmaps::gb_interior(),
                 GbShell::Rounded => bitmaps::gbc_interior(),
+                GbShell::Pico8 => bitmaps::pico8_interior(),
             };
             (src, s.w, s.h, Some(s.mask))
         }
@@ -476,7 +479,7 @@ pub fn neutral_shell(mould: Mould, clear: bool) -> Vec<u8> {
         Mould::Gba => Shape::Gba,
         Mould::Notched => Shape::Gb(GbShell::Notched),
         Mould::Rounded => Shape::Gb(GbShell::Rounded),
-        Mould::Pico8 => Shape::Pico8,
+        Mould::Pico8 => Shape::Gb(GbShell::Pico8),
         #[cfg(feature = "nds")]
         Mould::Ds => Shape::Ds,
     };

@@ -110,7 +110,8 @@ pub fn layout(canvas_w: f32, platform: Platform) -> Layout {
         Platform::Gba | Platform::Gbav => slot_ui::LABEL_W as f32 / slot_ui::CART_W as f32,
         #[cfg(feature = "nds")]
         Platform::Nds => slot_ui::DS_LABEL_W as f32 / slot_ui::DS_CART_W as f32,
-        Platform::Gb | Platform::Gbc | Platform::Pico8 => slot_ui::GB_LABEL_W as f32 / GB_CART_W as f32,
+        Platform::Gb | Platform::Gbc => slot_ui::GB_LABEL_W as f32 / GB_CART_W as f32,
+        Platform::Pico8 => slot_ui::PICO8_LABEL_W as f32 / GB_CART_W as f32,
     };
     let printer = w * sticker + 2.0 * (SLIP_PAD + PRINTER_LIP);
     let margin = ((canvas_w - wide - printer) / 3.0).floor().max(EDGE);
@@ -494,6 +495,12 @@ pub fn well_of(cart: &slot_store::Cart) -> [u32; 4] {
             slot_ui::GBC_LABEL_Y,
             slot_ui::GBC_LABEL_W,
             slot_ui::GBC_LABEL_H,
+        ],
+        Some(slot_ui::GbShell::Pico8) => [
+            slot_ui::PICO8_LABEL_X,
+            slot_ui::PICO8_LABEL_Y,
+            slot_ui::PICO8_LABEL_W,
+            slot_ui::PICO8_LABEL_H,
         ],
     }
 }

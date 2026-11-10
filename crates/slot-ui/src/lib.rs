@@ -70,6 +70,7 @@ pub use cart::{
     label_tags, label_text, neutral_shell, seated_box, shelf_shape, shows_interior, text_label, CartFace, CART_H, CART_W,
     GBC_LABEL_H, GBC_LABEL_W, GBC_LABEL_X, GBC_LABEL_Y, GB_CART_H, GB_CART_W, GB_LABEL_H,
     GB_LABEL_W, GB_LABEL_X, GB_LABEL_Y, LABEL_H, LABEL_W, LABEL_WELL, LABEL_X, LABEL_Y,
+    PICO8_LABEL_H, PICO8_LABEL_W, PICO8_LABEL_X, PICO8_LABEL_Y,
 };
 #[cfg(feature = "nds")]
 pub use cart::{DS_LABEL_H, DS_LABEL_W, DS_LABEL_X, DS_LABEL_Y};

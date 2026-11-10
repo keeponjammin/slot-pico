@@ -722,21 +722,19 @@ impl Frontend {
         let shadow = cart_shadow();
         let id = compositor.create_texture(shadow.w, shadow.h, &shadow.rgba);
         self.session.app_mut().set_cart_shadow(id);
-        let notched = gb_cart_shadow(GbShell::Notched);
-        let notched = compositor.create_texture(notched.w, notched.h, &notched.rgba);
-        let rounded = gb_cart_shadow(GbShell::Rounded);
-        let rounded = compositor.create_texture(rounded.w, rounded.h, &rounded.rgba);
-        self.session.app_mut().set_gb_cart_shadows(notched, rounded);
+        for shell in GbShell::ALL {
+            let shadow = gb_cart_shadow(shell);
+            let id = compositor.create_texture(shadow.w, shadow.h, &shadow.rgba);
+            self.session.app_mut().set_gb_cart_shadow(shell, id);
+        }
         let board = slot_ui::cart_backing(None);
         let board = compositor.create_texture(board.w, board.h, &board.rgba);
         self.session.app_mut().set_cart_backing(board);
-        let notched = slot_ui::cart_backing(Some(GbShell::Notched));
-        let notched = compositor.create_texture(notched.w, notched.h, &notched.rgba);
-        let rounded = slot_ui::cart_backing(Some(GbShell::Rounded));
-        let rounded = compositor.create_texture(rounded.w, rounded.h, &rounded.rgba);
-        self.session
-            .app_mut()
-            .set_gb_cart_backings(notched, rounded);
+        for shell in GbShell::ALL {
+            let board = slot_ui::cart_backing(Some(shell));
+            let id = compositor.create_texture(board.w, board.h, &board.rgba);
+            self.session.app_mut().set_gb_cart_backing(shell, id);
+        }
         let slot = {
             let mut upload =
                 |bytes: &[u8]| compositor.create_texture(slot_ui::SLOT_W, slot_ui::SLOT_H, bytes);
