@@ -251,6 +251,10 @@ fn pico8_runs_through_its_loader_with_its_folders_on_the_card() {
     assert_eq!(after("-volume"), "200");
     assert_eq!(line.last().unwrap(), "-splore");
     assert_eq!(
+        pico8::sdl_shim(root),
+        Path::new("/mnt/sdcard/System/pico8_sdl.so")
+    );
+    assert_eq!(
         pico8::library_path(Path::new("/i"), pico8::Arch::Armhf),
         "/i/lib:/usr/lib32:/usr/lib/arm-linux-gnueabihf"
     );

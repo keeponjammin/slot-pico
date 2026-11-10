@@ -613,6 +613,14 @@ pub fn library_path(install: &Path, arch: Arch) -> String {
         .join(":")
 }
 
+/// Loaded ahead of the 32-bit PICO-8: BaseOS's stock SDL2 has no haptics,
+/// and PICO-8 cannot start SDL while it asks for them. See cores/pico8-sdl.
+pub const SDL_SHIM: &str = "pico8_sdl.so";
+
+pub fn sdl_shim(root: &Path) -> PathBuf {
+    root.join("System").join(SDL_SHIM)
+}
+
 pub fn read_next(run: &Path) -> Option<Launch> {
     let file = run.join(NEXT_FILE);
     let text = std::fs::read_to_string(&file).ok()?;
@@ -691,6 +699,10 @@ mod runner {
             .env("LD_LIBRARY_PATH", library_path(&install, arch))
             .env("HOME", home_dir(root))
             .env("SDL_GAMECONTROLLERCONFIG", mappings.join("\n"));
+        let shim = sdl_shim(root);
+        if arch == Arch::Armhf && shim.is_file() {
+            command.env("LD_PRELOAD", &shim);
+        }
         let wifi = match launch {
             Launch::Splore => Wifi::up(root, run),
             Launch::Cart(_) => Wifi::Untouched,
