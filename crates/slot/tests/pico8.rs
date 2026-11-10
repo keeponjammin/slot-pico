@@ -1063,3 +1063,141 @@ fn a_favourite_does_not_overwrite_a_cart_of_the_same_name() {
     assert_eq!(std::fs::read(dir.join("Kalikan.p8.png")).unwrap(), b"mine");
     assert!(dir.join("Kalikan (kalikan_menu-6).p8.png").is_file());
 }
+
+fn args(line: &[&str]) -> Vec<String> {
+    line.iter().map(|s| s.to_string()).collect()
+}
+
+#[test]
+fn splores_wget_lines_are_read() {
+    let get = pico8::Wget::parse(&args(&[
+        "https://carts.lexaloffle.com/celeste-2.p8.png",
+        "-q",
+        "-O",
+        "/home/bbs/temp.p8.png",
+    ]))
+    .unwrap();
+    assert_eq!(get.url, "https://carts.lexaloffle.com/celeste-2.p8.png");
+    assert_eq!(get.out.as_deref(), Some(Path::new("/home/bbs/temp.p8.png")));
+    assert_eq!(get.post, None);
+
+    let post = pico8::Wget::parse(&args(&[
+        "http://www.lexaloffle.com/bbs/x.php",
+        "-q",
+        "-O",
+        "out",
+        "--post-file=/tmp/body",
+    ]))
+    .unwrap();
+    assert_eq!(post.post.as_deref(), Some(Path::new("/tmp/body")));
+    assert_eq!(pico8::Wget::parse(&args(&["-q", "-O", "x"])), None);
+}
+
+#[test]
+fn the_wget_script_runs_slot_without_pico8s_libraries() {
+    let script = pico8::wget_script(&args(&[
+        "/lib/ld-linux-aarch64.so.1",
+        "/mnt/sd card/System/slot",
+    ]));
+    assert!(script.starts_with("#!/bin/sh\n"));
+    assert!(script.contains("unset LD_PRELOAD LD_LIBRARY_PATH"));
+    assert!(script.contains(
+        "exec '/lib/ld-linux-aarch64.so.1' '/mnt/sd card/System/slot' --wget \"$@\""
+    ));
+    assert!(pico8::wget_script(&args(&["/it's"])).contains(r"'/it'\''s'"));
+}
+
+#[test]
+fn wget_goes_first_on_pico8s_path() {
+    let path = pico8::path_with(Path::new("/run/pico8-bin"), Some("/usr/bin:/bin".as_ref()));
+    assert_eq!(path, "/run/pico8-bin:/usr/bin:/bin");
+}
+
+/// Serves one request with `status` and `body`, and hands back what was asked.
+fn serve_once(status: &str, body: &'static [u8]) -> (String, std::thread::JoinHandle<String>) {
+    use std::io::{BufRead as _, BufReader, Read as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/bbs/cpost_lister3.php?max=32", listener.local_addr().unwrap());
+    let status = status.to_string();
+    let served = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut head = String::new();
+        let mut length = 0;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if let Some(n) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                length = n.trim().parse().unwrap();
+            }
+            head.push_str(&line);
+            if line == "\r\n" {
+                break;
+            }
+        }
+        let mut posted = vec![0; length];
+        reader.read_exact(&mut posted).unwrap();
+        let mut stream = stream;
+        write!(
+            stream,
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        stream.write_all(body).unwrap();
+        head + &String::from_utf8_lossy(&posted)
+    });
+    (url, served)
+}
+
+#[test]
+fn slot_fetches_for_splore_as_wget_would() {
+    let d = TempDir::new().unwrap();
+    let out = d.path().join("list.txt");
+    let (url, served) = serve_once("200 OK", b"cart list");
+    let code = pico8::wget(&args(&[&url, "-q", "-O", out.to_str().unwrap()]));
+    assert_eq!(code, 0);
+    assert_eq!(std::fs::read(&out).unwrap(), b"cart list");
+    assert!(served.join().unwrap().starts_with("GET /bbs/cpost_lister3.php?max=32 "));
+
+    let body = d.path().join("body");
+    std::fs::write(&body, b"fav=1").unwrap();
+    let (url, served) = serve_once("200 OK", b"ok");
+    let post = format!("--post-file={}", body.display());
+    assert_eq!(pico8::wget(&args(&[&url, "-q", "-O", out.to_str().unwrap(), &post])), 0);
+    let asked = served.join().unwrap();
+    assert!(asked.starts_with("POST "), "{asked}");
+    assert!(asked.ends_with("fav=1"), "{asked}");
+
+    let (url, served) = serve_once("404 Not Found", b"");
+    assert_eq!(pico8::wget(&args(&[&url, "-O", out.to_str().unwrap()])), 8);
+    served.join().unwrap();
+
+    let gone = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", gone.local_addr().unwrap());
+    drop(gone);
+    assert_eq!(pico8::wget(&args(&[&url, "-O", out.to_str().unwrap()])), 4);
+}
+
+#[test]
+fn a_favourite_as_pico8_0_2_7_writes_it() {
+    let line = "|molemole-1           |molemole             |1794   |adam_atomic      |                     |mole mole\n";
+    assert_eq!(
+        pico8::parse_favourites(line),
+        [pico8::Favourite {
+            id: "molemole-1".into(),
+            title: "mole mole".into()
+        }]
+    );
+    assert_eq!(pico8::shelf_name("mole mole", "molemole-1"), "Mole Mole");
+}
+
+#[test]
+fn a_host_that_never_resolves_is_given_up_on() {
+    let wait = std::time::Duration::from_millis(600);
+    let began = std::time::Instant::now();
+    assert!(!pico8::resolves("https://no-such-host.invalid/x", wait));
+    assert!(began.elapsed() >= wait);
+    assert!(pico8::resolves("http://127.0.0.1:9/x", wait));
+    assert!(pico8::resolves("http://localhost/x", wait));
+}

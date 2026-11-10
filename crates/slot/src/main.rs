@@ -31,6 +31,10 @@ fn main() {
         slot::root::ensure(std::path::Path::new(&dir));
         return;
     }
+    if first.as_deref() == Some("--wget") {
+        let rest: Vec<String> = args.collect();
+        std::process::exit(slot::pico8::wget(&rest));
+    }
     #[cfg(unix)]
     if first.as_deref() == Some("--pico8") {
         let (Some(card), Some(run)) = (

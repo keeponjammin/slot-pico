@@ -55,7 +55,7 @@ The other things slot does for its own games, like save states, rewind and bezel
 
 ## Splore
 
-Splore needs the internet. It joins the Wi-Fi networks you saved in slot's Network menu and goes back offline when you leave.
+Splore needs the internet. It joins the Wi-Fi networks you saved in slot's Network menu and goes back offline when you leave. PICO-8 downloads through a `wget` program, which BaseOS lacks; slot stands in for it, so nothing needs installing.
 
 To keep a cart from Splore, favourite it there. When you leave PICO-8, slot puts every new favourite on the PICO-8 shelf as a `.p8.png` named after its title, like any cart of your own: it plays on fake-08 too, with a label of its own. A favourite Splore never downloaded is fetched from the BBS while the Wi-Fi is still on; one that could not be fetched goes on the next time.
 

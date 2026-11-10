@@ -377,6 +377,189 @@ pub fn fetch_bbs(agent: &ureq::Agent, id: &str) -> Fetched {
 /// A `.p8.png` is 160x205 pixels; nothing honest is near this size.
 const BBS_CART_LIMIT: u64 = 1 << 20;
 
+/// PICO-8 for Linux has no network code of its own: Splore runs
+/// `wget "<url>" -q -O "<file>"` through the shell, and BaseOS has no `wget`
+/// that reaches the BBS. slot answers as that `wget` instead, with its own
+/// HTTPS and certificates: a script by that name, first on PICO-8's `PATH`,
+/// runs `slot --wget`.
+pub const WGET_DIR: &str = "pico8-bin";
+
+/// One download as Splore asks `wget` for it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Wget {
+    pub url: String,
+    /// Where the body goes; `-` is standard output.
+    pub out: Option<PathBuf>,
+    /// The body to POST, from a file.
+    pub post: Option<PathBuf>,
+}
+
+impl Wget {
+    /// Reads the `wget` arguments PICO-8 passes, and the few like them.
+    pub fn parse(args: &[String]) -> Option<Wget> {
+        let mut url = None;
+        let mut out = None;
+        let mut post = None;
+        let mut it = args.iter();
+        while let Some(arg) = it.next() {
+            match arg.as_str() {
+                "-q" | "--quiet" | "-nv" | "--no-check-certificate" => {}
+                "-O" | "--output-document" => out = Some(PathBuf::from(it.next()?)),
+                "--post-file" => post = Some(PathBuf::from(it.next()?)),
+                a if a.starts_with("--output-document=") => {
+                    out = Some(PathBuf::from(&a["--output-document=".len()..]))
+                }
+                a if a.starts_with("--post-file=") => {
+                    post = Some(PathBuf::from(&a["--post-file=".len()..]))
+                }
+                a if a.starts_with("-O") && a.len() > 2 => out = Some(PathBuf::from(&a[2..])),
+                a if a.starts_with("http://") || a.starts_with("https://") => {
+                    url = Some(a.to_string())
+                }
+                a => eprintln!("slot: wget: ignoring {a}"),
+            }
+        }
+        Some(Wget {
+            url: url?,
+            out,
+            post,
+        })
+    }
+}
+
+/// `slot --wget`: fetches as `wget` would, with wget's exit codes: 0 done,
+/// 1 bad arguments, 3 the file could not be written, 4 no network, 8 the
+/// server said no.
+pub fn wget(args: &[String]) -> i32 {
+    let Some(job) = Wget::parse(args) else {
+        eprintln!("slot: wget: no URL in {args:?}");
+        return 1;
+    };
+    // Splore asks for carts the moment it opens, while the Wi-Fi slot just
+    // started is still getting an address: wait for it rather than fail.
+    if !resolves(&job.url, WGET_NETWORK_WAIT) {
+        eprintln!("slot: wget: {}: no network", job.url);
+        return 4;
+    }
+    let agent = crate::update::agent(WGET_TIMEOUT);
+    let reply = match &job.post {
+        Some(file) => {
+            let Ok(body) = std::fs::read(file) else {
+                eprintln!("slot: wget: cannot read {}", file.display());
+                return 1;
+            };
+            agent
+                .post(&job.url)
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .send(&body[..])
+        }
+        None => agent.get(&job.url).call(),
+    };
+    let reply = match reply {
+        Ok(r) => r,
+        Err(ureq::Error::StatusCode(code)) => {
+            eprintln!("slot: wget: {}: {code}", job.url);
+            return 8;
+        }
+        Err(e) => {
+            eprintln!("slot: wget: {}: {e}", job.url);
+            return 4;
+        }
+    };
+    let mut body = Vec::new();
+    if let Err(e) = reply
+        .into_body()
+        .into_with_config()
+        .limit(WGET_LIMIT)
+        .reader()
+        .read_to_end(&mut body)
+    {
+        eprintln!("slot: wget: {}: {e}", job.url);
+        return 4;
+    }
+    let written = match job.out.as_deref() {
+        Some(p) if p != Path::new("-") => std::fs::write(p, &body),
+        _ => std::io::Write::write_all(&mut std::io::stdout(), &body),
+    };
+    match written {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("slot: wget: {e}");
+            3
+        }
+    }
+}
+
+const WGET_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// How long a download waits for the network to come up.
+const WGET_NETWORK_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Whether the host in `url` can be looked up, trying again until `wait`
+/// has passed.
+pub fn resolves(url: &str, wait: std::time::Duration) -> bool {
+    use std::net::ToSocketAddrs as _;
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let port = match url.starts_with("https://") {
+        true => 443,
+        false => 80,
+    };
+    let target = match host.rsplit_once(':') {
+        Some((_, p)) if p.parse::<u16>().is_ok() => host.to_string(),
+        _ => format!("{host}:{port}"),
+    };
+    let began = std::time::Instant::now();
+    loop {
+        if target.to_socket_addrs().is_ok_and(|mut a| a.next().is_some()) {
+            return true;
+        }
+        if began.elapsed() >= wait {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+}
+/// Splore's lists and carts are tens of kilobytes.
+const WGET_LIMIT: u64 = 8 << 20;
+
+/// The `wget` script: runs `command` (slot, through its loader when it runs
+/// through one) with `--wget`, without the 32-bit libraries and shim
+/// PICO-8 runs with.
+pub fn wget_script(command: &[String]) -> String {
+    let quoted: Vec<String> = command
+        .iter()
+        .map(|a| format!("'{}'", a.replace('\'', r"'\''")))
+        .collect();
+    format!(
+        "#!/bin/sh\nunset LD_PRELOAD LD_LIBRARY_PATH\nexec {} --wget \"$@\"\n",
+        quoted.join(" ")
+    )
+}
+
+/// How to run this slot again: through the loader it was started with, if
+/// any, as the launcher does on cards that cannot run programs themselves.
+pub fn self_command(root: &Path) -> Vec<String> {
+    let exe = std::env::current_exe().unwrap_or_else(|_| root.join("System/slot"));
+    let through_loader = exe
+        .file_name()
+        .is_some_and(|n| n.to_string_lossy().starts_with("ld-linux"));
+    match through_loader {
+        true => vec![
+            exe.display().to_string(),
+            root.join("System/slot").display().to_string(),
+        ],
+        false => vec![exe.display().to_string()],
+    }
+}
+
+/// `PATH` with `dir` first.
+pub fn path_with(dir: &Path, path: Option<&std::ffi::OsStr>) -> std::ffi::OsString {
+    let mut out = std::ffi::OsString::from(dir);
+    out.push(":");
+    out.push(path.unwrap_or(std::ffi::OsStr::new("/usr/bin:/bin:/usr/sbin:/sbin")));
+    out
+}
+
 pub fn install_dir(root: &Path) -> PathBuf {
     crate::root::bios_dir(root).join(INSTALL_DIR)
 }
@@ -1047,6 +1230,12 @@ mod runner {
         if let Some(s) = &shared {
             command.env(HUD_ENV, s.path());
         }
+        match put_wget(root, run) {
+            Ok(dir) => {
+                command.env("PATH", path_with(&dir, std::env::var_os("PATH").as_deref()));
+            }
+            Err(e) => eprintln!("slot: pico8: no wget for Splore: {e}"),
+        }
         // slot handed over with the cart seated in the slot, and that frame is
         // still on screen. Leaving PICO-8 powers off into it, and slot starts
         // again on it to eject the cart, so there is no black between them.
@@ -1094,6 +1283,18 @@ mod runner {
         wifi.down(root);
         eprintln!("slot: pico8: exited {code}");
         0
+    }
+
+    /// Writes the `wget` script into `$SLOT_RUN`, which unlike the card
+    /// runs programs. Returns its folder.
+    fn put_wget(root: &Path, run: &Path) -> std::io::Result<PathBuf> {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = run.join(WGET_DIR);
+        std::fs::create_dir_all(&dir)?;
+        let script = dir.join("wget");
+        std::fs::write(&script, wget_script(&self_command(root)))?;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
+        Ok(dir)
     }
 
     const UDHCPC: &str = "/sbin/udhcpc";
