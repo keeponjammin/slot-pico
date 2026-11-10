@@ -130,7 +130,7 @@ pub use quick_menu::{
     add_legend, clock_legend_faces, core_button_legends, picking_legend_faces, delete_legends, draw_menu_ground, link_button_legends,
     fetch_choice_legends, fetch_legends, fetch_skip_legend, print_stop_legend, prompt_legends,
     studio_legend,
-    StudioGlyph, quick_description_face, quick_label_face, quick_legend_faces,
+    StudioGlyph, quick_description_face, quick_label_face, pico8_label_faces, quick_legend_faces,
     quick_pointer_face, quick_row_top, quick_row_top_at, quick_scroll, quick_value_face,
     quick_warning_value_face, quick_window, repair_legends, update_legends, visible_rows, QuickMenu,
     QuickMenuFaces, QuickRow, QuickScroll, QuickValue, QUICK_EDGE, QUICK_LABEL_X, QUICK_PITCH,

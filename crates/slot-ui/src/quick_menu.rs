@@ -503,6 +503,29 @@ impl QuickRow {
         self as usize
     }
 
+    /// The rows PICO-8's pad names its own way: its X and O buttons and its pause button, where
+    /// a Game Boy has A, B and Start.
+    pub const PICO8_NAMED: [QuickRow; 5] = [
+        QuickRow::GameA,
+        QuickRow::GameB,
+        QuickRow::GameStart,
+        QuickRow::GameTurboA,
+        QuickRow::GameTurboB,
+    ];
+
+    /// What the row is called on PICO-8's pad, where that differs from its usual name. The
+    /// core's A is PICO-8's X and its B is PICO-8's O.
+    pub fn pico8_label(self) -> Option<&'static str> {
+        match self {
+            QuickRow::GameA => Some("X Button"),
+            QuickRow::GameB => Some("O Button"),
+            QuickRow::GameStart => Some("Pause"),
+            QuickRow::GameTurboA => Some("Turbo X"),
+            QuickRow::GameTurboB => Some("Turbo O"),
+            _ => None,
+        }
+    }
+
     pub fn page(self) -> &'static [QuickRow] {
         match self {
             QuickRow::ScreenGeneral
@@ -1228,6 +1251,18 @@ pub fn quick_label_face(row: QuickRow, lit: bool) -> UndoFace {
     quick_text_face(row.label(), if lit { MENU_INK } else { DIM_INK })
 }
 
+/// The label faces for PICO-8's own button names, in `QuickRow::PICO8_NAMED` order. They go
+/// after every row's own label in `QuickMenuFaces::labels`.
+pub fn pico8_label_faces() -> Vec<[UndoFace; 2]> {
+    QuickRow::PICO8_NAMED
+        .iter()
+        .map(|r| {
+            let name = r.pico8_label().unwrap_or(r.label());
+            [false, true].map(|lit| quick_text_face(name, if lit { MENU_INK } else { DIM_INK }))
+        })
+        .collect()
+}
+
 fn cap_centre(label: &fontdue::Font, h: u32) -> f32 {
     match label.horizontal_line_metrics(MENU_PX) {
         Some(v) => {
@@ -1666,6 +1701,8 @@ fn join((a, aw, ah): (&[u8], u32, u32), (b, bw, bh): (&[u8], u32, u32)) -> UndoF
 pub type FacePair = [(TexId, u32, u32); 2];
 
 pub struct QuickMenuFaces {
+    /// One pair a row, in `QuickRow::ALL` order, then PICO-8's own button names, in
+    /// `QuickRow::PICO8_NAMED` order.
     pub labels: Vec<[(TexId, u32, u32); 2]>,
     pub pointer: (TexId, u32, u32),
     pub values: Vec<[(TexId, u32, u32); 2]>,
@@ -1697,12 +1734,27 @@ pub struct QuickMenu<'a> {
     pub bound: Option<&'a [Option<FacePair>]>,
     pub description: Option<(TexId, u32, u32)>,
     pub over_game: bool,
+    /// Over a PICO-8 game: its buttons go by PICO-8's names.
+    pub pico8: bool,
     /// Where the sliding footer starts. The scrim stops there so it does not darken the strip.
     pub footer_top: f32,
     pub canvas: Canvas,
 }
 
 impl QuickMenu<'_> {
+    fn label_of<'f>(
+        &self,
+        faces: &'f QuickMenuFaces,
+        row: QuickRow,
+    ) -> Option<&'f [(TexId, u32, u32); 2]> {
+        let own = QuickRow::PICO8_NAMED
+            .iter()
+            .position(|r| *r == row)
+            .filter(|_| self.pico8)
+            .and_then(|at| faces.labels.get(QuickRow::ALL.len() + at));
+        own.or_else(|| faces.labels.get(row.index()))
+    }
+
     pub fn draw(&self, out: &mut Vec<Draw>) {
         match (self.over_game, self.row.page() == QuickRow::PLAY_SCREEN) {
             (false, _) => draw_menu_ground(self.canvas, self.ground, out),
@@ -1729,7 +1781,7 @@ impl QuickMenu<'_> {
             .row
             .page()
             .iter()
-            .filter_map(|r| faces.labels.get(r.index()))
+            .filter_map(|r| self.label_of(faces, *r))
             .map(|l| l[1].1)
             .max()
             .unwrap_or(0);
@@ -1739,7 +1791,7 @@ impl QuickMenu<'_> {
             let y = quick_row_top_at(self.canvas, row, self.row, self.hidden) + TYPE_DROP;
             let lit = row == self.row;
             let mut label_end = QUICK_LABEL_X;
-            if let Some(&(tex, w, h)) = faces.labels.get(row.index()).map(|l| &l[lit as usize]) {
+            if let Some(&(tex, w, h)) = self.label_of(faces, row).map(|l| &l[lit as usize]) {
                 let x = match row.centred() {
                     true => self.canvas.centred(main_w as f32),
                     false => QUICK_LABEL_X - pad,

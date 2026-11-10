@@ -800,6 +800,7 @@ mod screen {
                     bound: None,
                     description: None,
                     over_game: self.show_backdrop,
+                    pico8: true,
                     // The menu's shade stops where the mouth begins, as in slot.
                     footer_top: canvas.h - MOUTH_H + dy,
                     canvas,

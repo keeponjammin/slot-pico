@@ -7433,6 +7433,7 @@ impl App {
                 gbc_overlay: self.overlay_faces(Platform::Gbc),
                 overlay: None,
                 over_game: false,
+                pico8: false,
                 footer_top: self.canvas().h,
                 canvas: self.canvas(),
             }
@@ -7641,6 +7642,7 @@ impl App {
                 gbc_overlay: None,
                 overlay: self.overlay_faces(self.playing_platform()),
                 over_game: true,
+                pico8: self.playing_platform() == Platform::Pico8,
                 footer_top: self.canvas().h - MOUTH_H + self.menu_footer_offset(),
                 canvas: self.canvas(),
             }
