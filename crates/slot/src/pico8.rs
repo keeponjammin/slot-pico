@@ -950,6 +950,7 @@ mod runner {
                 if unsaved.is_some() {
                     save_state(root, state);
                 }
+                blank_screen();
                 return status.code().unwrap_or(-1);
             }
             if let Some(at) = quitting {
@@ -1094,6 +1095,7 @@ mod runner {
                             libc::kill(sleep.pid, libc::SIGTERM);
                             libc::kill(sleep.pid, libc::SIGCONT);
                         }
+                        blank_screen();
                         quitting = Some(Instant::now());
                         break;
                     }
@@ -1151,6 +1153,37 @@ mod runner {
     fn save_state(root: &Path, state: &slot_store::SlotState) {
         if let Err(e) = slot_store::write_slot_state(root, state) {
             eprintln!("slot: pico8: could not save volume and brightness: {e}");
+        }
+    }
+
+    /// Paints all of fb0 black, every buffer. Leaving PICO-8 goes to black
+    /// at once, instead of holding its last frame or the menu for the
+    /// seconds it takes PICO-8 to quit and slot to start, and slot fades in
+    /// from black. Called again once PICO-8 is gone, in case it drew while
+    /// quitting.
+    fn blank_screen() {
+        use std::io::Write as _;
+        let sys =
+            |name: &str| std::fs::read_to_string(format!("/sys/class/graphics/fb0/{name}")).ok();
+        let len = (|| {
+            let stride: usize = sys("stride")?.trim().parse().ok()?;
+            let rows: usize = sys("virtual_size")?
+                .trim()
+                .split(',')
+                .nth(1)?
+                .parse()
+                .ok()?;
+            Some(stride * rows)
+        })();
+        let Some(len) = len else {
+            return;
+        };
+        let blanked = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/fb0")
+            .and_then(|mut fb| fb.write_all(&vec![0u8; len]));
+        if let Err(e) = blanked {
+            eprintln!("slot: pico8: could not blank the screen: {e}");
         }
     }
 
