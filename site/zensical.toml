@@ -22,6 +22,7 @@ nav = [
       "guide/save-states.md",
       "guide/fast-forward-rewind-turbo.md",
       "guide/linking.md",
+      "guide/pico-8.md",
       "guide/power.md",
     ] },
     { "Making It Yours" = [

@@ -28,9 +28,11 @@ pub(super) fn ok() -> Reply {
 
 fn served() -> impl Iterator<Item = Platform> {
     #[cfg(feature = "nds")]
-    return Platform::ALL.into_iter().filter(|p| *p != Platform::Nds);
+    return Platform::ALL
+        .into_iter()
+        .filter(|p| *p != Platform::Nds && !p.runs_outside());
     #[cfg(not(feature = "nds"))]
-    Platform::ALL.into_iter()
+    Platform::ALL.into_iter().filter(|p| !p.runs_outside())
 }
 
 fn platform_for(tag: &str) -> Option<Platform> {

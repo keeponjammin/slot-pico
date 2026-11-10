@@ -198,4 +198,29 @@ launch
 launch
 grep -qx "wifi stop" "$TMP/link.log" 2>/dev/null || fail "WiFi left up by a crashed run was not torn down"
 
+setup
+rm -f "$TMP/calls.log"
+{
+	echo '#!/bin/sh'
+	printf 'echo "$*" >> "%s"\n' "$TMP/calls.log"
+	printf 'n=$(wc -l < "%s")\n' "$TMP/calls.log"
+	printf '[ "$n" = 1 ] && printf "pico8\\nsplore\\n" > "%s"\n' "$TMP/run/slot.next"
+	echo 'exit 0'
+} > "$TMP/handoff"
+chmod 755 "$TMP/handoff"
+SLOT_ROOT="$TMP/card" AGS_RUN="$TMP/run" AGS_SPLASH="$TMP/splash" AGS_HOLD=0 \
+	AGS_LOADER="$TMP/handoff" AGS_SYNC="$TMP/sync" sh "$SCRIPT" 2>/dev/null || true
+[ "$(sed -n 1p "$TMP/calls.log")" = "$TMP/card/System/slot" ] || fail "slot did not run first"
+[ "$(sed -n 2p "$TMP/calls.log")" = "$TMP/card/System/slot --pico8" ] || fail "slot.next did not hand off to PICO-8"
+[ "$(sed -n 3p "$TMP/calls.log")" = "$TMP/card/System/slot" ] || fail "slot did not start again after PICO-8"
+[ "$(wc -l < "$TMP/calls.log")" -eq 3 ] || fail "the session went on after slot exited with nothing to hand off"
+[ ! -e "$TMP/run/slot.next" ] || fail "the hand-off was left behind"
+
+setup
+rm -f "$TMP/calls.log"
+printf 'pico8\nsplore\n' > "$TMP/run/slot.next"
+SLOT_ROOT="$TMP/card" AGS_RUN="$TMP/run" AGS_SPLASH="$TMP/splash" AGS_HOLD=0 \
+	AGS_LOADER="$TMP/loader" AGS_SYNC="$TMP/sync" sh "$SCRIPT" 2>/dev/null || true
+[ ! -e "$TMP/run/slot.next" ] || fail "a hand-off left from an earlier session ran PICO-8 on boot"
+
 echo "launch: all passed"

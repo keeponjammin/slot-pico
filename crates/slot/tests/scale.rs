@@ -26,6 +26,7 @@ fn root_for(platform: Platform) -> TempDir {
             std::fs::write(dir.join("Game.gba"), rom).unwrap();
             d
         }
+        Platform::Pico8 => unreachable!("PICO-8 never plays inside slot"),
     }
 }
 

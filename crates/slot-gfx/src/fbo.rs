@@ -373,6 +373,12 @@ impl Compositor {
         self.size
     }
 
+    /// Waits for the GPU to finish everything queued, so memory it draws
+    /// into can be written by someone else afterwards.
+    pub fn finish(&self) {
+        unsafe { gl::Finish() };
+    }
+
     pub fn read_frame(&self) -> Vec<u8> {
         let (w, h) = self.size;
         let stride = w as usize * 4;
@@ -395,6 +401,29 @@ impl Compositor {
             top_down.extend_from_slice(row);
         }
         top_down
+    }
+
+    /// The top `rows` rows of the frame, top down, as RGBA. Reads only those
+    /// back, for a strip like the HUD's without the rest of the frame.
+    pub fn read_top(&self, rows: u32) -> Vec<u8> {
+        let (w, h) = self.size;
+        let rows = rows.min(h);
+        let stride = w as usize * 4;
+        let mut buf = vec![0u8; stride * rows as usize];
+        unsafe {
+            gl::BindFramebuffer(gl::FRAMEBUFFER, self.fbo);
+            gl::PixelStorei(gl::PACK_ALIGNMENT, 1);
+            gl::ReadPixels(
+                0,
+                (h - rows) as i32,
+                w as i32,
+                rows as i32,
+                gl::RGBA,
+                gl::UNSIGNED_BYTE,
+                buf.as_mut_ptr() as *mut std::ffi::c_void,
+            );
+        }
+        buf.chunks_exact(stride).rev().flatten().copied().collect()
     }
 
     pub fn read_window(&mut self, window: (u32, u32)) -> Vec<u8> {

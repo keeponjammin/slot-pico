@@ -9,6 +9,7 @@ pub enum Mould {
     Gba,
     Notched,
     Rounded,
+    Pico8,
     #[cfg(feature = "nds")]
     Ds,
 }
@@ -39,9 +40,11 @@ pub const STICKER_H: u32 = 228;
 const GBA_CART_PNG: &[u8] = include_bytes!("../../../assets/gba_cart.png");
 const GB_CART_PNG: &[u8] = include_bytes!("../../../assets/gb_cart.png");
 const GBC_CART_PNG: &[u8] = include_bytes!("../../../assets/gbc_cart.png");
+const PICO8_CART_PNG: &[u8] = include_bytes!("../../../assets/pico8_cart.png");
 const GBA_INTERIOR_PNG: &[u8] = include_bytes!("../../../assets/gba_interior.png");
 const GB_INTERIOR_PNG: &[u8] = include_bytes!("../../../assets/gb_interior.png");
 const GBC_INTERIOR_PNG: &[u8] = include_bytes!("../../../assets/gbc_interior.png");
+const PICO8_INTERIOR_PNG: &[u8] = include_bytes!("../../../assets/pico8_interior.png");
 const GB_BOARD_PNG: &[u8] = include_bytes!("../../../assets/gb_board.png");
 const GB_BOARD_EMPTY_PNG: &[u8] = include_bytes!("../../../assets/gb_board_empty.png");
 const GB_CHIP_PNG: &[u8] = include_bytes!("../../../assets/gb_chip.png");
@@ -142,6 +145,13 @@ pub fn gbc_cart() -> &'static [u8] {
     load(GBC_CART_PNG, GB_CART_W, GB_CART_H, &P)
 }
 
+/// The PICO-8 cart's outline, from `assets/pico8_cart.png` (drawn by
+/// `tools/pico8_cart.py`): a pak's size, pixel-stepped corners.
+pub fn pico8_cart() -> &'static [u8] {
+    static P: OnceLock<Vec<u8>> = OnceLock::new();
+    load(PICO8_CART_PNG, GB_CART_W, GB_CART_H, &P)
+}
+
 /// The inside of a GBA cart, from `assets/gba_interior.png`. Same size as the cart and
 /// the board, so the carousel can stack the three 1:1. Its colour is set by the game, with the
 /// same overlay blend the shells use.
@@ -160,6 +170,12 @@ pub fn gb_interior() -> &'static [u8] {
 pub fn gbc_interior() -> &'static [u8] {
     static P: OnceLock<Vec<u8>> = OnceLock::new();
     load(GBC_INTERIOR_PNG, GB_CART_W, GB_CART_H, &P)
+}
+
+/// The back of a PICO-8 cart, from `assets/pico8_interior.png`.
+pub fn pico8_interior() -> &'static [u8] {
+    static P: OnceLock<Vec<u8>> = OnceLock::new();
+    load(PICO8_INTERIOR_PNG, GB_CART_W, GB_CART_H, &P)
 }
 
 /// The Game Boy PCB, from `assets/gb_board.png`, drawn between the pak's back and front plastic.
@@ -330,6 +346,7 @@ const GBC_SHELL_PNG: &[u8] = include_bytes!("../../../assets/gbc_neutral.png");
 const GBA_CLEAR_PNG: &[u8] = include_bytes!("../../../assets/gba_clear.png");
 const GB_CLEAR_PNG: &[u8] = include_bytes!("../../../assets/gb_neutral.png");
 const GBC_CLEAR_PNG: &[u8] = include_bytes!("../../../assets/gbc_clear.png");
+const PICO8_SHELL_PNG: &[u8] = include_bytes!("../../../assets/pico8_neutral.png");
 
 /// The neutral shell asset for a mould, opaque or the separate clear one. The game's colour is
 /// blended onto it by the caller.
@@ -389,6 +406,7 @@ pub fn shell_asset(mould: Mould, clear: bool) -> &'static [u8] {
     static GBA_CLEAR: OnceLock<Vec<u8>> = OnceLock::new();
     static GB_CLEAR: OnceLock<Vec<u8>> = OnceLock::new();
     static GBC_CLEAR: OnceLock<Vec<u8>> = OnceLock::new();
+    static PICO8: OnceLock<Vec<u8>> = OnceLock::new();
     let (bytes, w, h, slot) = match (mould, clear) {
         (Mould::Gba, false) => (GBA_SHELL_PNG, GBA_CART_W, GBA_CART_H, &GBA),
         (Mould::Notched, false) => (GB_SHELL_PNG, GB_CART_W, GB_CART_H, &GB),
@@ -396,6 +414,8 @@ pub fn shell_asset(mould: Mould, clear: bool) -> &'static [u8] {
         (Mould::Gba, true) => (GBA_CLEAR_PNG, GBA_CART_W, GBA_CART_H, &GBA_CLEAR),
         (Mould::Notched, true) => (GB_CLEAR_PNG, GB_CART_W, GB_CART_H, &GB_CLEAR),
         (Mould::Rounded, true) => (GBC_CLEAR_PNG, GB_CART_W, GB_CART_H, &GBC_CLEAR),
+        // One raster for both: like the Game Boy Color's, its clear shell is the same plastic.
+        (Mould::Pico8, _) => (PICO8_SHELL_PNG, GB_CART_W, GB_CART_H, &PICO8),
         #[cfg(feature = "nds")]
         (Mould::Ds, _) => return ds_cart(),
     };

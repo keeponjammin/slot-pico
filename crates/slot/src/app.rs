@@ -3143,7 +3143,7 @@ impl App {
             #[cfg(feature = "nds")]
             Platform::Nds => &mut self.state.bezel_gba,
             Platform::Gb => &mut self.state.bezel_gb,
-            Platform::Gbc => &mut self.state.bezel_gbc,
+            Platform::Gbc | Platform::Pico8 => &mut self.state.bezel_gbc,
         }
     }
 
@@ -3153,7 +3153,7 @@ impl App {
             #[cfg(feature = "nds")]
             Platform::Nds => &self.state.bezel_gba,
             Platform::Gb => &self.state.bezel_gb,
-            Platform::Gbc => &self.state.bezel_gbc,
+            Platform::Gbc | Platform::Pico8 => &self.state.bezel_gbc,
         };
         let choices = self.bezel_choices(platform);
         if choices.contains(pick) {
@@ -3209,7 +3209,7 @@ impl App {
             #[cfg(feature = "nds")]
             Platform::Nds => &mut self.state.overlay_nds,
             Platform::Gb => &mut self.state.overlay_gb,
-            Platform::Gbc => &mut self.state.overlay_gbc,
+            Platform::Gbc | Platform::Pico8 => &mut self.state.overlay_gbc,
         }
     }
 
@@ -3219,7 +3219,7 @@ impl App {
             #[cfg(feature = "nds")]
             Platform::Nds => &self.state.overlay_nds,
             Platform::Gb => &self.state.overlay_gb,
-            Platform::Gbc => &self.state.overlay_gbc,
+            Platform::Gbc | Platform::Pico8 => &self.state.overlay_gbc,
         };
         let name = pick.as_deref()?;
         self.overlay_entries(platform)
@@ -3642,10 +3642,9 @@ impl App {
         }
     }
 
-    pub fn set_gb_cart_shadows(&mut self, notched: TexId, rounded: TexId) {
+    pub fn set_gb_cart_shadow(&mut self, shell: GbShell, face: TexId) {
         for (_, shelf) in &mut self.shelves {
-            shelf.set_gb_shadow(GbShell::Notched, notched);
-            shelf.set_gb_shadow(GbShell::Rounded, rounded);
+            shelf.set_gb_shadow(shell, face);
         }
     }
 
@@ -3655,10 +3654,9 @@ impl App {
         }
     }
 
-    pub fn set_gb_cart_backings(&mut self, notched: TexId, rounded: TexId) {
+    pub fn set_gb_cart_backing(&mut self, shell: GbShell, face: TexId) {
         for (_, shelf) in &mut self.shelves {
-            shelf.set_gb_backing(GbShell::Notched, notched);
-            shelf.set_gb_backing(GbShell::Rounded, rounded);
+            shelf.set_gb_backing(shell, face);
         }
     }
 
@@ -3938,14 +3936,14 @@ impl App {
             #[cfg(feature = "nds")]
             Platform::Nds => self.state.scale_gba,
             Platform::Gb => self.state.scale_gb,
-            Platform::Gbc => self.state.scale_gbc,
+            Platform::Gbc | Platform::Pico8 => self.state.scale_gbc,
         }
     }
 
     fn stretch_of(&self, platform: Platform) -> Stretch {
         match platform {
             Platform::Gb => self.state.stretch_gb,
-            Platform::Gbc => self.state.stretch_gbc,
+            Platform::Gbc | Platform::Pico8 => self.state.stretch_gbc,
             Platform::Gba | Platform::Gbav => Stretch::Classic,
             #[cfg(feature = "nds")]
             Platform::Nds => Stretch::Classic,
@@ -4087,7 +4085,7 @@ impl App {
             #[cfg(feature = "nds")]
             Platform::Nds => self.state.scale_gba = to,
             Platform::Gb => self.state.scale_gb = to,
-            Platform::Gbc => self.state.scale_gbc = to,
+            Platform::Gbc | Platform::Pico8 => self.state.scale_gbc = to,
         }
     }
 
@@ -4690,7 +4688,7 @@ impl App {
             #[cfg(feature = "nds")]
             Platform::Nds => Shader::Off,
             Platform::Gb => self.state.shader_gb,
-            Platform::Gbc => self.state.shader_gbc,
+            Platform::Gbc | Platform::Pico8 => self.state.shader_gbc,
         }
     }
 
@@ -4720,7 +4718,7 @@ impl App {
             #[cfg(feature = "nds")]
             Platform::Nds => false,
             Platform::Gb => self.state.colour_correction_gb,
-            Platform::Gbc => self.state.colour_correction_gbc,
+            Platform::Gbc | Platform::Pico8 => self.state.colour_correction_gbc,
         }
     }
 
@@ -4730,7 +4728,7 @@ impl App {
             #[cfg(feature = "nds")]
             Platform::Nds => Blending::Off,
             Platform::Gb => self.state.blending_gb,
-            Platform::Gbc => self.state.blending_gbc,
+            Platform::Gbc | Platform::Pico8 => self.state.blending_gbc,
         }
     }
 
@@ -5905,7 +5903,7 @@ impl App {
             #[cfg(feature = "nds")]
             Platform::Nds => (&mut self.state.shader_gba, gba_shaders),
             Platform::Gb => (&mut self.state.shader_gb, &Shader::GB[..]),
-            Platform::Gbc => (&mut self.state.shader_gbc, &Shader::GB[..]),
+            Platform::Gbc | Platform::Pico8 => (&mut self.state.shader_gbc, &Shader::GB[..]),
         };
         *shader = shader.step(choices, right);
         let said = match *shader {
@@ -5960,7 +5958,7 @@ impl App {
                 #[cfg(feature = "nds")]
                 Platform::Nds => QuickRow::GbaColourCorrection,
                 Platform::Gb => QuickRow::GbColourCorrection,
-                Platform::Gbc => QuickRow::GbcColourCorrection,
+                Platform::Gbc | Platform::Pico8 => QuickRow::GbcColourCorrection,
             };
             self.change_setting(row, true);
             let said = match self.colour_correction() {
@@ -9271,6 +9269,9 @@ impl App {
         }) else {
             return;
         };
+        if platform.runs_outside() {
+            return self.hand_off(at);
+        }
         self.seated_platform = Some(platform);
         eprintln!(
             "slot: launch: insert {cart} at {:.1} ms",
@@ -9293,6 +9294,42 @@ impl App {
             resumed: false,
             clean,
         };
+    }
+
+    /// PICO-8 runs as its own program: leave what to run for the launcher,
+    /// remember where the shelf was, and exit so the launcher can run it and
+    /// start slot again after.
+    fn hand_off(&mut self, at: usize) {
+        self.play_held = None;
+        let Some(cart) = self.shelf().carts.get(at).cloned() else {
+            return;
+        };
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        if !crate::pico8::installed(&root) {
+            eprintln!(
+                "slot: pico8: no PICO-8 in {}, refusing {}",
+                crate::pico8::install_dir(&root).display(),
+                cart.stem
+            );
+            return self.refuse();
+        }
+        let Some(run) = std::env::var_os(crate::loading_mark::RUN_VAR) else {
+            eprintln!("slot: pico8: no {} to hand off through", crate::loading_mark::RUN_VAR);
+            return self.refuse();
+        };
+        let launch = crate::pico8::launch_for(&cart.rom);
+        if let Err(e) = crate::pico8::write_next(std::path::Path::new(&run), &launch) {
+            eprintln!("slot: pico8: {e}");
+            return self.refuse();
+        }
+        eprintln!("slot: pico8: handing off {}", cart.stem);
+        self.stop_romm();
+        self.remember_shelf();
+        self.state.played(cart.platform, &cart.stem);
+        self.persist();
+        self.relaunching = true;
     }
 
     pub fn starting_clean(&self) -> bool {
@@ -9521,6 +9558,9 @@ impl App {
         let Some(cart) = self.shelf().carts.get(self.shelf().index) else {
             return;
         };
+        if cart.platform.runs_outside() {
+            return;
+        }
         let seat =
             slot_store::core_for_platform(&root, &cart.stem, cart.platform, self.state.gb_core);
         let now = self.now();
@@ -11093,7 +11133,7 @@ impl App {
                 0.72,
                 [slot_ui::GB_LABEL_X, slot_ui::GB_LABEL_Y, slot_ui::GB_LABEL_W, slot_ui::GB_LABEL_H],
             ),
-            Platform::Gbc => (
+            Platform::Gbc | Platform::Pico8 => (
                 0.72,
                 [slot_ui::GBC_LABEL_X, slot_ui::GBC_LABEL_Y, slot_ui::GBC_LABEL_W, slot_ui::GBC_LABEL_H],
             ),
@@ -14166,7 +14206,7 @@ pub fn overlay_slot(platform: Platform) -> usize {
     match platform {
         Platform::Gba | Platform::Gbav => 0,
         Platform::Gb => 1,
-        Platform::Gbc => 2,
+        Platform::Gbc | Platform::Pico8 => 2,
         #[cfg(feature = "nds")]
         Platform::Nds => 3,
     }
@@ -14178,7 +14218,7 @@ fn bezel_slot(platform: Platform) -> usize {
         #[cfg(feature = "nds")]
         Platform::Nds => 0,
         Platform::Gb => 1,
-        Platform::Gbc => 2,
+        Platform::Gbc | Platform::Pico8 => 2,
     }
 }
 

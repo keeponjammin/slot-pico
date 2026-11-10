@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- PICO-8 has its own shelf. Bring your own copy: put Lexaloffle's Raspberry Pi zip in `BIOS/PICO-8/` and your `.p8` and `.p8.png` carts in `Games/PICO8/`. A Splore cart opens PICO-8's BBS browser over your saved Wi-Fi. slot steps aside while PICO-8 runs: <kbd>MENU</kbd> pauses it under slot's in-game menu, holding <kbd>MENU</kbd> quits back to the same cart, and <kbd>POWER</kbd> or closing the lid turns the screen off. Labels come from the carts themselves.
+
 ## [1.15.2](https://github.com/slot-cfw/slot/releases/tag/v1.15.2)
 
 - Load State on Insert is now Auto Load State, with a new Power On option. Carts you insert start fresh, but powering on still picks up the game you were playing. On and Off are now Always and Never. Save State on Eject is now Eject Save State. ([#206](https://github.com/slot-cfw/slot/issues/206))

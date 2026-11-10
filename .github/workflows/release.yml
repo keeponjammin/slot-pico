@@ -18,12 +18,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install zip, cmake, Task and Bun
+      - name: Install zip, cmake, the 32-bit ARM compiler, Task and Bun
         run: |
           set -eu
           sed -i '/bullseye-security/d' /etc/apt/sources.list
           apt-get -o Acquire::Check-Valid-Until=false update
-          apt-get install -y --no-install-recommends zip unzip cmake
+          apt-get install -y --no-install-recommends zip unzip cmake gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
           curl -fsSL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin
           curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash -s "bun-v1.2.6"
 
@@ -39,6 +39,7 @@ jobs:
           file "$out/System/gpsp_libretro.so" | grep -q aarch64
           file "$out/System/gambatte_libretro.so" | grep -q aarch64
           test -x "$out/System/slot"
+          file "$out/System/pico8_sdl.so" | grep -q "32-bit.*ARM"
           gpsp_src_sha="$(cat vendor/gpsp-src.sha)"
           test -f "$out/System/licenses/gpsp-${gpsp_src_sha}.tar.gz"
           test -f "$out/System/licenses/gpsp-${gpsp_src_sha}.meta"

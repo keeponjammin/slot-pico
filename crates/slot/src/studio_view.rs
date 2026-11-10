@@ -92,7 +92,7 @@ pub fn layout(canvas_w: f32, platform: Platform) -> Layout {
                 / slot_ui::CART_W as f32,
             slot_ui::DS_CART_H as f32 / slot_ui::DS_CART_W as f32,
         ),
-        Platform::Gb | Platform::Gbc => (
+        Platform::Gb | Platform::Gbc | Platform::Pico8 => (
             if narrow { 248.0 } else { GB_CART_W as f32 },
             GB_CART_H as f32 / GB_CART_W as f32,
         ),
@@ -101,7 +101,7 @@ pub fn layout(canvas_w: f32, platform: Platform) -> Layout {
         Platform::Gba | Platform::Gbav => 0.0,
         #[cfg(feature = "nds")]
         Platform::Nds => 0.0,
-        Platform::Gb | Platform::Gbc => w * GB_ART_INSET / GB_CART_W as f32,
+        Platform::Gb | Platform::Gbc | Platform::Pico8 => w * GB_ART_INSET / GB_CART_W as f32,
     };
     let h = w * ratio;
     let (sin, cos) = CART_TILT.to_radians().abs().sin_cos();
@@ -111,6 +111,7 @@ pub fn layout(canvas_w: f32, platform: Platform) -> Layout {
         #[cfg(feature = "nds")]
         Platform::Nds => slot_ui::DS_LABEL_W as f32 / slot_ui::DS_CART_W as f32,
         Platform::Gb | Platform::Gbc => slot_ui::GB_LABEL_W as f32 / GB_CART_W as f32,
+        Platform::Pico8 => slot_ui::PICO8_LABEL_W as f32 / GB_CART_W as f32,
     };
     let printer = w * sticker + 2.0 * (SLIP_PAD + PRINTER_LIP);
     let margin = ((canvas_w - wide - printer) / 3.0).floor().max(EDGE);
@@ -495,6 +496,12 @@ pub fn well_of(cart: &slot_store::Cart) -> [u32; 4] {
             slot_ui::GBC_LABEL_W,
             slot_ui::GBC_LABEL_H,
         ],
+        Some(slot_ui::GbShell::Pico8) => [
+            slot_ui::PICO8_LABEL_X,
+            slot_ui::PICO8_LABEL_Y,
+            slot_ui::PICO8_LABEL_W,
+            slot_ui::PICO8_LABEL_H,
+        ],
     }
 }
 
@@ -503,7 +510,7 @@ pub fn shelf_rect(canvas: slot_gfx::Canvas, cart: &slot_store::Cart) -> [f32; 4]
         Platform::Gba | Platform::Gbav => (slot_ui::CART_W as f32, slot_ui::CART_H as f32),
         #[cfg(feature = "nds")]
         Platform::Nds => (slot_ui::DS_CART_W as f32, slot_ui::DS_CART_H as f32),
-        Platform::Gb | Platform::Gbc => (GB_CART_W as f32, GB_CART_H as f32),
+        Platform::Gb | Platform::Gbc | Platform::Pico8 => (GB_CART_W as f32, GB_CART_H as f32),
     };
     [(canvas.w - w) / 2.0, slot_ui::rest_y(canvas, h), w, h]
 }

@@ -23,7 +23,7 @@ pub fn size(platform: Platform) -> (u32, u32) {
         Platform::Gba | Platform::Gbav => (W, H),
         #[cfg(feature = "nds")]
         Platform::Nds => (DS_W, DS_H),
-        Platform::Gb | Platform::Gbc => (GB_W, GB_H),
+        Platform::Gb | Platform::Gbc | Platform::Pico8 => (GB_W, GB_H),
     }
 }
 

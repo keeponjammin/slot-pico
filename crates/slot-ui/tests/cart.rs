@@ -4,7 +4,7 @@ use slot_ui::{
     label_text, rest_y, seated_box, shell_for, silhouette, Finish, GbShell, CART_H, CART_W,
     GBC_LABEL_H, GBC_LABEL_W, GBC_LABEL_X, GBC_LABEL_Y, GB_CART_H, GB_CART_W, GB_LABEL_H,
     GB_LABEL_W, GB_LABEL_X, GB_LABEL_Y, LABEL_H, LABEL_W, LABEL_X, LABEL_Y, MOUTH_H, OUT_H,
-    PLATE_H,
+    PICO8_LABEL_H, PICO8_LABEL_W, PICO8_LABEL_X, PICO8_LABEL_Y, PLATE_H,
 };
 use tempfile::TempDir;
 
@@ -332,7 +332,7 @@ fn the_game_boy_pak_body_has_the_scanned_aspect() {
 
 #[test]
 fn the_game_boy_outline_has_parallel_sides_and_no_grip_ears() {
-    for shell in [GbShell::Notched, GbShell::Rounded] {
+    for shell in GbShell::ALL {
         let gb = gb_silhouette(shell, GB_CART_W, GB_CART_H);
         let width_at = |y: u32| {
             (0..GB_CART_W)
@@ -656,7 +656,7 @@ fn the_cart_shadow_is_the_cart_in_black() {
 
 #[test]
 fn each_game_boy_shell_gets_a_black_shadow_of_its_own_exact_outline() {
-    for shell in [GbShell::Notched, GbShell::Rounded] {
+    for shell in GbShell::ALL {
         let s = slot_ui::gb_cart_shadow(shell);
         assert_eq!((s.w, s.h), (GB_CART_W, GB_CART_H));
         let own = gb_silhouette(shell, GB_CART_W, GB_CART_H);
@@ -774,4 +774,60 @@ fn a_gba_cart_is_backed_by_the_whole_picker_board() {
     assert_eq!((pak.w, pak.h), (GB_CART_W, GB_CART_H));
     let mid = pak.rgba[(((pak.h / 2) * pak.w + pak.w / 2) * 4 + 3) as usize];
     assert!(mid > 200, "the pak board is empty in the middle");
+}
+
+fn pico8_cart(shell: Option<slot_store::ShellChoice>) -> slot_store::Cart {
+    slot_store::Cart {
+        platform: Platform::Pico8,
+        stem: "celeste".into(),
+        rom: "Games/PICO8/celeste.p8".into(),
+        label: None,
+        title: "celeste".into(),
+        code: String::new(),
+        shell,
+    }
+}
+
+#[test]
+fn a_pico8_cart_is_its_own_mould_with_a_square_label() {
+    let cart = pico8_cart(None);
+    assert_eq!(slot_ui::gb_shell_of(&cart), Some(GbShell::Pico8));
+    assert_eq!(slot_ui::shelf_shape(&cart).0, Some(GbShell::Pico8));
+    assert_eq!(slot_ui::folder_gb_shell(&cart), Some(GbShell::Pico8));
+    assert_eq!(PICO8_LABEL_W, PICO8_LABEL_H, "PICO-8 labels are square");
+    assert_eq!(slot_ui::label_size(&cart), (PICO8_LABEL_W, PICO8_LABEL_H));
+    let face = cart_face(&cart);
+    assert_eq!((face.w, face.h), (GB_CART_W, GB_CART_H));
+    assert_eq!(
+        pixel_alpha(&face, PICO8_LABEL_X + PICO8_LABEL_W / 2, PICO8_LABEL_Y + PICO8_LABEL_H / 2),
+        255
+    );
+
+    let pico8 = gb_silhouette(GbShell::Pico8, GB_CART_W, GB_CART_H);
+    let rounded = gb_silhouette(GbShell::Rounded, GB_CART_W, GB_CART_H);
+    let apart: u32 = pico8
+        .iter()
+        .zip(&rounded)
+        .map(|(p, r)| u32::from(p.abs_diff(*r)))
+        .sum();
+    assert!(
+        apart / 255 > 100,
+        "the PICO-8 cart is only {} px off the Game Boy Color pak: it is still that pak",
+        apart / 255
+    );
+}
+
+#[test]
+fn a_pico8_cart_takes_the_colour_its_owner_picks() {
+    let beside_label = (PICO8_LABEL_X / 2, GB_CART_H / 2);
+    let [r, g, b] = pixel(&cart_face(&pico8_cart(None)), beside_label.0, beside_label.1);
+    assert!(b > r && b > g, "the default PICO-8 cart is its dark blue, not {:?}", [r, g, b]);
+
+    let red = slot_store::ShellChoice {
+        outline: slot_store::Outline::Auto,
+        colour: [0xff, 0x00, 0x4d],
+        finish: slot_store::ShellFinish::Solid,
+    };
+    let [r, g, b] = pixel(&cart_face(&pico8_cart(Some(red))), beside_label.0, beside_label.1);
+    assert!(r > 150 && r > g + 100 && r > b + 60, "the picked red did not reach the cart: {:?}", [r, g, b]);
 }

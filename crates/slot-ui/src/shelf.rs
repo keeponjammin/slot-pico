@@ -41,7 +41,7 @@ pub fn box_size(platform: Platform) -> (u32, u32) {
         Platform::Gba | Platform::Gbav => (318, 282),
         #[cfg(feature = "nds")]
         Platform::Nds => (318, 282),
-        Platform::Gb | Platform::Gbc => (312, 277),
+        Platform::Gb | Platform::Gbc | Platform::Pico8 => (312, 277),
     }
 }
 
@@ -71,9 +71,11 @@ pub struct Shelf {
     shadow: Option<TexId>,
     gb_shadow: Option<TexId>,
     gbc_shadow: Option<TexId>,
+    pico8_shadow: Option<TexId>,
     backing: Option<TexId>,
     gb_backing: Option<TexId>,
     gbc_backing: Option<TexId>,
+    pico8_backing: Option<TexId>,
     hearted: Vec<bool>,
     heart: Option<(TexId, f32, f32)>,
     ride: f32,
@@ -96,9 +98,11 @@ impl Shelf {
             shadow: None,
             gb_shadow: None,
             gbc_shadow: None,
+            pico8_shadow: None,
             backing: None,
             gb_backing: None,
             gbc_backing: None,
+            pico8_backing: None,
             ride: 0.0,
             vel: 0.0,
             held: None,
@@ -151,9 +155,11 @@ impl Shelf {
             shadow: self.shadow,
             gb_shadow: self.gb_shadow,
             gbc_shadow: self.gbc_shadow,
+            pico8_shadow: self.pico8_shadow,
             backing: self.backing,
             gb_backing: self.gb_backing,
             gbc_backing: self.gbc_backing,
+            pico8_backing: self.pico8_backing,
             heart: self.heart,
             ..Shelf::new(Vec::new())
         }
@@ -214,6 +220,7 @@ impl Shelf {
         match shell {
             GbShell::Notched => self.gb_shadow = Some(face),
             GbShell::Rounded => self.gbc_shadow = Some(face),
+            GbShell::Pico8 => self.pico8_shadow = Some(face),
         }
     }
 
@@ -225,6 +232,7 @@ impl Shelf {
         match shell {
             GbShell::Notched => self.gb_backing = Some(face),
             GbShell::Rounded => self.gbc_backing = Some(face),
+            GbShell::Pico8 => self.pico8_backing = Some(face),
         }
     }
 
@@ -297,6 +305,7 @@ impl Shelf {
             None => self.backing,
             Some(GbShell::Notched) => self.gb_backing,
             Some(GbShell::Rounded) => self.gbc_backing,
+            Some(GbShell::Pico8) => self.pico8_backing,
         };
         [self.interiors.get(i).copied().flatten(), board]
     }
@@ -527,6 +536,7 @@ impl Shelf {
                 None => self.backing,
                 Some(GbShell::Notched) => self.gb_backing,
                 Some(GbShell::Rounded) => self.gbc_backing,
+                Some(GbShell::Pico8) => self.pico8_backing,
             };
             let gba = self.shell(i).is_none();
             // A GBA cart's board and back shell fill the cart's box, exactly where the
@@ -691,6 +701,7 @@ impl Shelf {
                     None => self.shadow,
                     Some(GbShell::Notched) => self.gb_shadow,
                     Some(GbShell::Rounded) => self.gbc_shadow,
+                    Some(GbShell::Pico8) => self.pico8_shadow,
                 };
                 if let Some(tex) = backing {
                     out.push(Draw::Tex {

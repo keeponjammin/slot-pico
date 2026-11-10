@@ -540,6 +540,8 @@ tasks:
       - cp -R card/System/* {{.OUT}}/System/
       - cp -R web/dist {{.OUT}}/System/web
       - for d in Bezels Labels Wallpapers; do cp card/$d/README.txt {{.OUT}}/$d/; done
+      - cp card/BIOS/PICO-8/README.txt {{.OUT}}/BIOS/PICO-8/
+      - sh cores/pico8-sdl/build.sh {{.OUT}}/System/pico8_sdl.so
       - file vendor/mgba_libretro.so | grep -q aarch64
       - file vendor/gpsp_libretro.so | grep -q aarch64
       - file vendor/gambatte_libretro.so | grep -q aarch64
@@ -588,6 +590,8 @@ tasks:
       - cp -R card/System/* {{.OUT}}/System/
       - cp -R web/dist {{.OUT}}/System/web
       - for d in Bezels Labels Wallpapers; do cp card/$d/README.txt {{.OUT}}/$d/; done
+      - cp card/BIOS/PICO-8/README.txt {{.OUT}}/BIOS/PICO-8/
+      - sh cores/pico8-sdl/build.sh {{.OUT}}/System/pico8_sdl.so
       - file vendor/mgba_libretro.so | grep -q aarch64
       - file vendor/gpsp_libretro.so | grep -q aarch64
       - file vendor/gambatte_libretro.so | grep -q aarch64

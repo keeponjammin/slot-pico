@@ -44,11 +44,11 @@ fn upload_shelf_faces(app: &mut App, c: &mut Compositor) {
     let shadow = cart_shadow();
     let shadow = tex(c, shadow.w, shadow.h, &shadow.rgba);
     app.set_cart_shadow(shadow);
-    let notched = gb_cart_shadow(GbShell::Notched);
-    let notched = tex(c, notched.w, notched.h, &notched.rgba);
-    let rounded = gb_cart_shadow(GbShell::Rounded);
-    let rounded = tex(c, rounded.w, rounded.h, &rounded.rgba);
-    app.set_gb_cart_shadows(notched, rounded);
+    for shell in GbShell::ALL {
+        let shadow = gb_cart_shadow(shell);
+        let shadow = tex(c, shadow.w, shadow.h, &shadow.rgba);
+        app.set_gb_cart_shadow(shell, shadow);
+    }
 
     let sockets = Core::ALL
         .iter()

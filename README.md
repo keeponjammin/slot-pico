@@ -16,7 +16,8 @@
 
 A bespoke, Game Boy-centric frontend for the Anbernic RG SP.
 
-Has support for GBA, GBC, and GB titles only.
+Has support for GBA, GBC, and GB titles, and for [PICO-8](https://www.lexaloffle.com/pico-8.php) carts and Splore
+with your own copy of PICO-8 (see [the PICO-8 guide](site/docs/guide/pico-8.md)).
 
 > [!IMPORTANT]
 > ROMs must be unzipped. slot does not read `.zip` or `.7z` files.
