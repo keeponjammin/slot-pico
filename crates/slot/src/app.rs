@@ -1269,7 +1269,7 @@ impl App {
         crate::server::sweep_names(root);
         slot_store::header_index::load(root);
         crate::boot_time::mark("root");
-        let carts = scan(root).unwrap_or_default();
+        let carts = crate::pico8::playable(root, scan(root).unwrap_or_default());
         retain_headers(&carts);
         crate::boot_time::mark("scan");
         let mut app = App::new(carts);
@@ -1387,6 +1387,7 @@ impl App {
             return;
         };
         let core = slot_store::core_for_platform(root, stem, platform, self.state.gb_core);
+        let core = crate::pico8::usable(root, core);
         let ring = StateRing::new(root, platform, core, stem);
         match ring.retire_resume(&format_stamp(self.wall_secs())) {
             Ok(Some(to)) => eprintln!("slot: resume: moved {stem}'s state to {}", to.display()),
@@ -9554,7 +9555,7 @@ impl App {
 
     /// Whether playing `cart` hands the device to another program instead of loading a core:
     /// the Splore card, which only the owner's PICO-8 can open, or a PICO-8 cart whose core
-    /// is set to PICO-8 over fake-08.
+    /// is set to PICO-8 over fake-08, while that PICO-8 is on the card.
     fn hands_off(&self, cart: &Cart) -> bool {
         if cart.platform != Platform::Pico8 {
             return false;
@@ -9563,8 +9564,9 @@ impl App {
             return true;
         }
         self.root.as_ref().is_some_and(|root| {
-            slot_store::core_for_platform(root, &cart.stem, cart.platform, self.state.gb_core)
-                .runs_outside()
+            let core =
+                slot_store::core_for_platform(root, &cart.stem, cart.platform, self.state.gb_core);
+            crate::pico8::usable(root, core).runs_outside()
         })
     }
 
@@ -9866,8 +9868,13 @@ impl App {
         }
         let seat =
             slot_store::core_for_platform(&root, &cart.stem, cart.platform, self.state.gb_core);
+        let seat = crate::pico8::usable(&root, seat);
         let now = self.now();
         let mut picker = CorePicker::open(Core::pair(cart.platform), seat, now);
+        // Without the owner's PICO-8 on the card, its chip cannot be seated.
+        if cart.platform == Platform::Pico8 && !crate::pico8::installed(&root) {
+            picker.bar(Core::Pico8);
+        }
         if self.core_faces_ready() {
             picker.start(now);
         }
@@ -11820,6 +11827,10 @@ impl App {
     }
 
     fn adopt_rescan(&mut self, carts: Vec<Cart>) {
+        let carts = match &self.root {
+            Some(root) => crate::pico8::playable(root, carts),
+            None => carts,
+        };
         retain_headers(&carts);
         if let Some(root) = self.root.clone() {
             self.gifts.retain_games(&root, &carts);

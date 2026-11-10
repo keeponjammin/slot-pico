@@ -259,3 +259,13 @@ fn back_mid_hop_on_a_game_boy_pair_turns_back_to_mgba() {
     assert_eq!(p.chip(400 + HOP_MS).seated, Some(Core::Mgba));
     assert_eq!(p.chip(400 + HOP_MS).across, 0.0);
 }
+
+#[test]
+fn a_barred_core_only_shakes_the_chip() {
+    let mut p = opened_on([Core::Fake08, Core::Pico8], Core::Fake08, 0);
+    p.bar(Core::Pico8);
+    assert_eq!(p.press(Press::Right, 500), Outcome::Refused);
+    assert_eq!(p.seat(), Core::Fake08);
+    assert_ne!(p.chip(500).shake, 0.0);
+    assert_eq!(p.press(Press::Keep, 900), Outcome::Write(Core::Fake08));
+}
