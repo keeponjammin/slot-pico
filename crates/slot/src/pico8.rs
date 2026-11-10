@@ -718,7 +718,9 @@ mod runner {
 
     use super::*;
     use crate::input::evdev::{decode, Hat, EVENT_BYTES, EV_SW, SW_LID};
+    use crate::pico8_hud::{output_volume, Levels, Shared};
     use crate::pico8_menu::{grab, Menu, Overlay, Saved, Step};
+    use slot_ui::{Hud, HudKind};
 
     const DEV: &str = "/dev/input";
     const SYS: &str = "/sys/class/input";
@@ -757,8 +759,24 @@ mod runner {
             let _ = std::fs::write(home_dir(root).join("sdl_controllers.txt"), &text);
         }
         let mut platform = slot_power::DevicePlatform::new(root.to_path_buf());
-        let state = slot_store::read_slot_state(root);
-        let volume = volume(&state, platform.headphones());
+        let mut state = slot_store::read_slot_state(root);
+        let headphones = platform.headphones();
+        let shim = sdl_shim(root);
+        // With the shim in, PICO-8 plays at full and the shim applies slot's
+        // volume, so the volume keys work while it plays.
+        let shared = match arch == Arch::Armhf && shim.is_file() {
+            true => Shared::create(Path::new(HUD_FILE))
+                .map_err(|e| eprintln!("slot: pico8: {HUD_FILE}: {e}"))
+                .ok(),
+            false => None,
+        };
+        let volume = match &shared {
+            Some(s) => {
+                s.set_volume(crate::pico8_hud::output_volume(&state, headphones));
+                256
+            }
+            None => volume(&state, headphones),
+        };
         let line = command_line(root, &binary, arch, &launch, volume, runs_directly(&binary));
         eprintln!("slot: pico8: {}", line.join(" "));
         let install = binary.parent().unwrap_or(root).to_path_buf();
@@ -778,10 +796,20 @@ mod runner {
             eprintln!("slot: pico8: SDL_JOYSTICK_DEVICE={pads}");
             command.env("SDL_JOYSTICK_DEVICE", pads);
         }
-        let shim = sdl_shim(root);
         if arch == Arch::Armhf && shim.is_file() {
             command.env("LD_PRELOAD", &shim);
         }
+        if let Some(s) = &shared {
+            command.env(HUD_ENV, s.path());
+        }
+        // The menu and the HUD draw with slot's own window, opened before
+        // PICO-8 opens its own, as slot's is when it hands over.
+        let overlay = match shared.is_some() {
+            true => Overlay::open()
+                .map_err(|e| eprintln!("slot: pico8: no window for the menu: {e}"))
+                .ok(),
+            false => None,
+        };
         let wifi = match launch {
             Launch::Splore => Wifi::up(root, run),
             Launch::Cart(_) => Wifi::Untouched,
@@ -794,9 +822,16 @@ mod runner {
                 return 1;
             }
         };
-        let brightness = state.brightness;
-        let code = watch(&mut child, keymap, &mut platform, brightness);
-        platform.set_backlight(brightness);
+        let code = watch(
+            &mut child,
+            keymap,
+            &mut platform,
+            root,
+            &mut state,
+            shared.as_ref(),
+            overlay,
+        );
+        platform.set_backlight(state.brightness + 1);
         wifi.down(root);
         eprintln!("slot: pico8: exited {code}");
         0
@@ -859,11 +894,16 @@ mod runner {
     /// stops it under slot's in-game menu; holding MENU, or Exit Game, asks
     /// it to quit. POWER turns the screen off and stops it until POWER
     /// again. Closing the lid of a clamshell does the same until it opens.
+    /// The volume keys and the brightness shortcuts work as in slot, with
+    /// slot's HUD over the game, when `shared` reaches the shim.
     fn watch(
         child: &mut Child,
         keymap: Keymap,
         platform: &mut slot_power::DevicePlatform,
-        brightness: u8,
+        root: &Path,
+        state: &mut slot_store::SlotState,
+        shared: Option<&Shared>,
+        mut overlay: Option<Overlay>,
     ) -> i32 {
         let nodes: Vec<PathBuf> = keymap.pick_devices(Path::new(DEV), Path::new(SYS));
         let files: Vec<File> = nodes.iter().filter_map(|n| File::open(n).ok()).collect();
@@ -875,15 +915,27 @@ mod runner {
         let mut lid = Lid::default();
         let mut sleep = Sleep {
             pid: child.id() as libc::pid_t,
-            brightness,
+            backlight: state.brightness + 1,
             asleep: false,
             held: false,
         };
         let mut gestures = Gestures::new();
+        gestures.set_entries(
+            crate::input::Table::new(
+                &slot_store::read_controls(root),
+                &slot_store::read_shortcuts(root),
+                &slot_store::read_carousel(root),
+                state.turbo,
+            )
+            .entries(),
+        );
         let mut menu = Menu::default();
-        let mut overlay: Option<Overlay> = None;
         let mut saved: Option<Saved> = None;
         let hidden = crate::pico8_menu::hidden();
+        let mut levels = Levels::default();
+        let mut hud = Hud::new();
+        let mut hud_drawn: Option<f32> = None;
+        let mut unsaved: Option<Millis> = None;
         let began = Instant::now();
         let mut quitting: Option<Instant> = None;
         let mut buf = [0u8; EVENT_BYTES * 16];
@@ -893,6 +945,9 @@ mod runner {
                     for f in &files {
                         grab(f, false);
                     }
+                }
+                if unsaved.is_some() {
+                    save_state(root, state);
                 }
                 return status.code().unwrap_or(-1);
             }
@@ -915,7 +970,11 @@ mod runner {
                     revents: 0,
                 })
                 .collect();
-            let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, 50) };
+            let wait = match hud_drawn.is_some_and(|a| a > 0.0) {
+                true => 16,
+                false => 50,
+            };
+            let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, wait) };
             let now = began.elapsed().as_millis() as Millis;
             let mut actions = gestures.tick(now);
             for (i, fd) in fds.iter().enumerate().filter(|_| ready > 0) {
@@ -946,10 +1005,34 @@ mod runner {
                     }
                 }
             }
+            if let Some(at) = unsaved {
+                if now.saturating_sub(at) >= SAVE_AFTER_MS {
+                    save_state(root, state);
+                    unsaved = None;
+                }
+            }
             if sleep.asleep || quitting.is_some() {
+                if let Some(s) = shared {
+                    update_hud(&mut hud, &mut hud_drawn, &mut overlay, s, now);
+                }
                 continue;
             }
             for action in actions {
+                if let (Some(s), false) = (shared, menu.is_open()) {
+                    let headphones = platform.headphones();
+                    if let Some(shown) = levels.act(state, headphones, action, now) {
+                        if shown.kind == HudKind::Brightness {
+                            sleep.backlight = state.brightness + 1;
+                            platform.set_backlight(sleep.backlight);
+                        }
+                        s.set_volume(output_volume(state, headphones));
+                        hud.set_headphones(headphones);
+                        hud.show(shown.kind, shown.value, shown.muted, now);
+                        hud_drawn = None;
+                        unsaved = Some(now);
+                        continue;
+                    }
+                }
                 match menu.act(action) {
                     Step::Nothing => {}
                     Step::Open => {
@@ -1013,6 +1096,58 @@ mod runner {
                     }
                 }
             }
+            if let Some(s) = shared {
+                update_hud(&mut hud, &mut hud_drawn, &mut overlay, s, now);
+            }
+        }
+    }
+
+    const HUD_FILE: &str = "/dev/shm/slot-pico8-hud";
+    /// Where the shim finds `HUD_FILE`.
+    const HUD_ENV: &str = "SLOT_PICO8_HUD";
+    const SAVE_AFTER_MS: Millis = 1000;
+
+    /// Keeps the shim's strip in step with `hud`: drawn again whenever its
+    /// opacity changes, hidden once it has faded.
+    fn update_hud(
+        hud: &mut Hud,
+        drawn: &mut Option<f32>,
+        overlay: &mut Option<Overlay>,
+        shared: &Shared,
+        now: Millis,
+    ) {
+        let alpha = hud
+            .shown_at
+            .map_or(0.0, |at| crate::pico8_hud::hud_alpha(at, now));
+        if *drawn == Some(alpha) {
+            return;
+        }
+        *drawn = Some(alpha);
+        if alpha <= 0.0 {
+            shared.hide();
+            return;
+        }
+        if overlay.is_none() {
+            match Overlay::open() {
+                Ok(o) => *overlay = Some(o),
+                Err(e) => {
+                    eprintln!("slot: pico8: hud: {e}");
+                    return;
+                }
+            }
+        }
+        let Some(o) = overlay.as_mut() else {
+            return;
+        };
+        hud.set_icons(o.hud_icons());
+        if let Some((rgba, w, h)) = o.hud_strip(hud, now) {
+            shared.show(&rgba, w, h);
+        }
+    }
+
+    fn save_state(root: &Path, state: &slot_store::SlotState) {
+        if let Err(e) = slot_store::write_slot_state(root, state) {
+            eprintln!("slot: pico8: could not save volume and brightness: {e}");
         }
     }
 
@@ -1063,7 +1198,8 @@ mod runner {
 
     struct Sleep {
         pid: libc::pid_t,
-        brightness: u8,
+        /// The backlight step to wake to, slot's brightness plus one.
+        backlight: u8,
         asleep: bool,
         /// The menu has PICO-8 stopped: waking leaves it stopped.
         held: bool,
@@ -1082,7 +1218,7 @@ mod runner {
                     platform.set_backlight(0);
                 }
                 false => {
-                    platform.set_backlight(self.brightness);
+                    platform.set_backlight(self.backlight);
                     if !self.held {
                         unsafe { libc::kill(self.pid, libc::SIGCONT) };
                     }

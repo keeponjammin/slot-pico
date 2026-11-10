@@ -116,9 +116,11 @@ mod screen {
     use std::os::unix::io::AsRawFd;
 
     use slot_gfx::{Canvas, Compositor, Draw, FbdevSurface, Surface, TexId};
+    use slot_input::Millis;
     use slot_ui::{
-        footer_ink, quick_label_face, quick_legend_faces, quick_pointer_face, QuickMenu,
-        QuickMenuFaces, QuickRow, UndoFace, HINT_EDGE, MOUTH_H,
+        footer_ink, icon_face, quick_label_face, quick_legend_faces, quick_pointer_face, Hud, Icon,
+        QuickMenu, QuickMenuFaces, QuickRow, UndoFace, HINT_EDGE, HUD_ICON_PX, HUD_INK, MOUTH_H,
+        PLATE_H,
     };
 
     use crate::panel_turn::{panel_turn, PanelTurn};
@@ -176,6 +178,7 @@ mod screen {
         window: (u32, u32),
         turned: bool,
         faces: QuickMenuFaces,
+        icons: Vec<TexId>,
         backdrop: Option<(TexId, u32, u32)>,
         show_backdrop: bool,
     }
@@ -198,6 +201,13 @@ mod screen {
                     .map_err(|e| e.to_string())?;
             }
             let faces = upload_faces(&mut compositor);
+            let icons = Icon::ALL
+                .iter()
+                .map(|i| {
+                    let f = icon_face(*i, HUD_ICON_PX, HUD_INK);
+                    compositor.create_texture(f.w, f.h, &f.rgba)
+                })
+                .collect();
             Ok(Overlay {
                 surface,
                 compositor,
@@ -205,9 +215,48 @@ mod screen {
                 window,
                 turned,
                 faces,
+                icons,
                 backdrop: None,
                 show_backdrop: false,
             })
+        }
+
+        /// slot's HUD icons, for `Hud::set_icons`.
+        pub fn hud_icons(&self) -> Vec<TexId> {
+            self.icons.clone()
+        }
+
+        /// The HUD's strip as it would look over a game, premultiplied RGBA
+        /// and as wide as the frame, drawn with slot's own `Hud` but never
+        /// put on screen: PICO-8's shim lays it over its frames. `None` on a
+        /// turned panel, whose framebuffer is not the way up it is drawn.
+        pub fn hud_strip(&mut self, hud: &Hud, now: Millis) -> Option<(Vec<u8>, u32, u32)> {
+            if self.turned {
+                return None;
+            }
+            let canvas = Canvas::of(self.window);
+            let rows = PLATE_H as u32;
+            let mut pass = |under: Option<[f32; 4]>| {
+                let mut out = Vec::new();
+                if let Some(colour) = under {
+                    out.push(Draw::Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: canvas.w,
+                        h: canvas.h,
+                        colour,
+                    });
+                }
+                hud.draw(canvas, now, &mut out);
+                self.compositor.fit(self.window);
+                self.compositor.begin_frame();
+                self.compositor.draw_list(&out);
+                self.compositor.read_top(rows)
+            };
+            let black = pass(None);
+            let white = pass(Some([1.0, 1.0, 1.0, 1.0]));
+            let w = self.compositor.frame_size().0;
+            Some((crate::pico8_hud::premultiplied(&black, &white), w, rows))
         }
 
         /// Shows `saved` behind the menu. A turned panel's framebuffer is
