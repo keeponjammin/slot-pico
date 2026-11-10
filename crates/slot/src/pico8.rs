@@ -640,7 +640,7 @@ mod runner {
     use slot_power::Platform as _;
 
     use super::*;
-    use crate::input::evdev::{decode, EVENT_BYTES, EV_KEY};
+    use crate::input::evdev::{decode, EVENT_BYTES, EV_KEY, EV_SW, SW_LID};
 
     const DEV: &str = "/dev/input";
     const SYS: &str = "/sys/class/input";
@@ -766,6 +766,7 @@ mod runner {
 
     /// Waits for PICO-8, reading the buttons it leaves alone: MENU asks it to
     /// quit, POWER turns the screen off and stops it until POWER again.
+    /// Closing the lid of a clamshell does the same until it opens.
     fn watch(
         child: &mut Child,
         keymap: Keymap,
@@ -777,8 +778,13 @@ mod runner {
         for f in &files {
             set_nonblocking(f);
         }
-        let pid = child.id() as libc::pid_t;
-        let mut asleep = false;
+        let hall = crate::input::device::find_hall(Path::new(PSY));
+        let mut lid = Lid::default();
+        let mut sleep = Sleep {
+            pid: child.id() as libc::pid_t,
+            brightness,
+            asleep: false,
+        };
         let mut quitting: Option<Instant> = None;
         let mut buf = [0u8; EVENT_BYTES * 16];
         loop {
@@ -789,6 +795,11 @@ mod runner {
                 if at.elapsed() > QUIT_GRACE {
                     eprintln!("slot: pico8: did not quit, killing it");
                     let _ = child.kill();
+                }
+            }
+            if let Some(shut) = hall.as_deref().and_then(read_hall) {
+                if let Some(shut) = lid.moved(shut) {
+                    sleep.set(shut, platform);
                 }
             }
             let mut fds: Vec<libc::pollfd> = files
@@ -811,30 +822,77 @@ mod runner {
                     continue;
                 };
                 for ev in buf[..read].chunks_exact(EVENT_BYTES).filter_map(decode) {
+                    if ev.kind == EV_SW && ev.code == SW_LID {
+                        if let Some(shut) = lid.moved(ev.value != 0) {
+                            sleep.set(shut, platform);
+                        }
+                        continue;
+                    }
                     if ev.kind != EV_KEY || ev.value != 1 {
                         continue;
                     }
                     match keymap.btn(ev.code) {
-                        Some(Btn::Menu) if !asleep && quitting.is_none() => {
+                        Some(Btn::Menu) if !sleep.asleep && quitting.is_none() => {
                             eprintln!("slot: pico8: MENU, back to slot");
-                            unsafe { libc::kill(pid, libc::SIGTERM) };
+                            unsafe { libc::kill(sleep.pid, libc::SIGTERM) };
                             quitting = Some(Instant::now());
                         }
                         Some(Btn::Power) => {
-                            asleep = !asleep;
-                            match asleep {
-                                true => {
-                                    unsafe { libc::kill(pid, libc::SIGSTOP) };
-                                    platform.set_backlight(0);
-                                }
-                                false => {
-                                    platform.set_backlight(brightness);
-                                    unsafe { libc::kill(pid, libc::SIGCONT) };
-                                }
-                            }
+                            let to = !sleep.asleep;
+                            sleep.set(to, platform);
                         }
                         _ => {}
                     }
+                }
+            }
+        }
+    }
+
+    const PSY: &str = "/sys/class/power_supply";
+
+    /// The SP-style hall sensor: 0 is shut, 1 is open.
+    fn read_hall(path: &Path) -> Option<bool> {
+        match std::fs::read_to_string(path).ok()?.trim() {
+            "0" => Some(true),
+            "1" => Some(false),
+            _ => None,
+        }
+    }
+
+    #[derive(Default)]
+    struct Lid {
+        shut: Option<bool>,
+    }
+
+    impl Lid {
+        /// The new state when the lid has moved since it was last seen.
+        fn moved(&mut self, shut: bool) -> Option<bool> {
+            let was = self.shut.replace(shut);
+            (was.is_some_and(|w| w != shut) || (was.is_none() && shut)).then_some(shut)
+        }
+    }
+
+    struct Sleep {
+        pid: libc::pid_t,
+        brightness: u8,
+        asleep: bool,
+    }
+
+    impl Sleep {
+        fn set(&mut self, asleep: bool, platform: &mut slot_power::DevicePlatform) {
+            if asleep == self.asleep {
+                return;
+            }
+            self.asleep = asleep;
+            eprintln!("slot: pico8: {}", if asleep { "sleep" } else { "wake" });
+            match asleep {
+                true => {
+                    unsafe { libc::kill(self.pid, libc::SIGSTOP) };
+                    platform.set_backlight(0);
+                }
+                false => {
+                    platform.set_backlight(self.brightness);
+                    unsafe { libc::kill(self.pid, libc::SIGCONT) };
                 }
             }
         }

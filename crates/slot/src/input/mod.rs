@@ -1,5 +1,5 @@
 mod bind;
-mod device;
+pub(crate) mod device;
 pub mod evdev;
 #[cfg(feature = "host")]
 mod host;

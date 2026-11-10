@@ -28,6 +28,7 @@ Press <kbd>A</kbd> on a cart to play it, or on Splore to browse the BBS. The scr
 | <kbd>START</kbd> | PICO-8's pause menu |
 | <kbd>MENU</kbd> | Quit PICO-8 and go back to slot |
 | <kbd>POWER</kbd> | Screen off and pause, press again to carry on |
+| Closing the lid | Screen off and pause until you open it |
 
 When PICO-8 quits, slot comes back on the same cart.
 

@@ -249,7 +249,7 @@ impl InputSource for DeviceInput {
     }
 }
 
-fn find_hall(psy: &Path) -> Option<PathBuf> {
+pub(crate) fn find_hall(psy: &Path) -> Option<PathBuf> {
     let mut supplies: Vec<PathBuf> = std::fs::read_dir(psy)
         .ok()?
         .filter_map(|e| e.ok())
