@@ -26,13 +26,16 @@ Press <kbd>A</kbd> on a cart to play it, or on Splore to browse the BBS. The scr
 | <kbd>B</kbd> | O |
 | <kbd>A</kbd> | X |
 | <kbd>START</kbd> | PICO-8's pause menu |
-| <kbd>MENU</kbd> | Quit PICO-8 and go back to slot |
+| <kbd>MENU</kbd> | Pause under slot's in-game menu |
+| Hold <kbd>MENU</kbd> | Quit PICO-8 and go back to slot |
 | <kbd>POWER</kbd> | Screen off and pause, press again to carry on |
 | Closing the lid | Screen off and pause until you open it |
 
 When PICO-8 quits, slot comes back on the same cart.
 
-The things slot does for its own games, like save states, rewind, bezels and the in-game menu, are not there in PICO-8. Games that save, save on their own.
+The in-game menu has two rows for PICO-8: Resume, or Exit Game to go back to slot. <kbd>B</kbd> or another tap of <kbd>MENU</kbd> also resumes.
+
+The other things slot does for its own games, like save states, rewind and bezels, are not there in PICO-8. Games that save, save on their own.
 
 ## Splore
 

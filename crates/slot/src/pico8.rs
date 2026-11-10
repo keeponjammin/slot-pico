@@ -552,17 +552,38 @@ impl Pad {
     }
 }
 
+/// Every gamepad the keymap reads, with its device node and SDL mapping line.
+fn controllers(keymap: Keymap, dev: &Path, sys: &Path) -> Vec<(PathBuf, String)> {
+    keymap
+        .pick_devices(dev, sys)
+        .into_iter()
+        .filter_map(|node| {
+            let pad = Pad::read(&sys.join(node.file_name()?).join("device"))?;
+            let line = pad.mapping(keymap)?;
+            Some((node, line))
+        })
+        .collect()
+}
+
 /// Every gamepad the keymap reads, as SDL mapping lines.
 pub fn controller_mappings(keymap: Keymap, dev: &Path, sys: &Path) -> Vec<String> {
-    let mut lines: Vec<String> = keymap
-        .pick_devices(dev, sys)
-        .iter()
-        .filter_map(|node| node.file_name())
-        .filter_map(|name| Pad::read(&sys.join(name).join("device")))
-        .filter_map(|pad| pad.mapping(keymap))
+    let mut lines: Vec<String> = controllers(keymap, dev, sys)
+        .into_iter()
+        .map(|(_, line)| line)
         .collect();
     lines.dedup();
     lines
+}
+
+/// The gamepads for `SDL_JOYSTICK_DEVICE`, colon separated. BaseOS runs no
+/// udevd, so nothing tags a device as a joystick and SDL 2.0.12's udev scan
+/// finds none. Named here, SDL opens each and checks its buttons itself.
+pub fn joystick_devices(keymap: Keymap, dev: &Path, sys: &Path) -> String {
+    controllers(keymap, dev, sys)
+        .iter()
+        .map(|(node, _)| node.display().to_string())
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 /// PICO-8's volume runs 0 to 256; slot's runs 0 to 100.
@@ -692,11 +713,12 @@ mod runner {
     use std::process::{Child, Command};
     use std::time::{Duration, Instant};
 
-    use slot_input::Btn;
+    use slot_input::{Btn, Context, Gestures, Millis, RawEvent};
     use slot_power::Platform as _;
 
     use super::*;
-    use crate::input::evdev::{decode, EVENT_BYTES, EV_KEY, EV_SW, SW_LID};
+    use crate::input::evdev::{decode, Hat, EVENT_BYTES, EV_SW, SW_LID};
+    use crate::pico8_menu::{grab, Menu, Overlay, Saved, Step};
 
     const DEV: &str = "/dev/input";
     const SYS: &str = "/sys/class/input";
@@ -750,6 +772,11 @@ mod runner {
         for (var, path) in gl_drivers(&library_dirs(&install, arch)) {
             eprintln!("slot: pico8: {var}={}", path.display());
             command.env(var, path);
+        }
+        let pads = joystick_devices(keymap, Path::new(DEV), Path::new(SYS));
+        if !pads.is_empty() {
+            eprintln!("slot: pico8: SDL_JOYSTICK_DEVICE={pads}");
+            command.env("SDL_JOYSTICK_DEVICE", pads);
         }
         let shim = sdl_shim(root);
         if arch == Arch::Armhf && shim.is_file() {
@@ -828,9 +855,10 @@ mod runner {
         }
     }
 
-    /// Waits for PICO-8, reading the buttons it leaves alone: MENU asks it to
-    /// quit, POWER turns the screen off and stops it until POWER again.
-    /// Closing the lid of a clamshell does the same until it opens.
+    /// Waits for PICO-8, reading the buttons it leaves alone. A MENU tap
+    /// stops it under slot's in-game menu; holding MENU, or Exit Game, asks
+    /// it to quit. POWER turns the screen off and stops it until POWER
+    /// again. Closing the lid of a clamshell does the same until it opens.
     fn watch(
         child: &mut Child,
         keymap: Keymap,
@@ -842,17 +870,30 @@ mod runner {
         for f in &files {
             set_nonblocking(f);
         }
+        let mut hats: Vec<Hat> = files.iter().map(|_| Hat::new(keymap)).collect();
         let hall = crate::input::device::find_hall(Path::new(PSY));
         let mut lid = Lid::default();
         let mut sleep = Sleep {
             pid: child.id() as libc::pid_t,
             brightness,
             asleep: false,
+            held: false,
         };
+        let mut gestures = Gestures::new();
+        let mut menu = Menu::default();
+        let mut overlay: Option<Overlay> = None;
+        let mut saved: Option<Saved> = None;
+        let hidden = crate::pico8_menu::hidden();
+        let began = Instant::now();
         let mut quitting: Option<Instant> = None;
         let mut buf = [0u8; EVENT_BYTES * 16];
         loop {
             if let Ok(Some(status)) = child.try_wait() {
+                if menu.is_open() {
+                    for f in &files {
+                        grab(f, false);
+                    }
+                }
                 return status.code().unwrap_or(-1);
             }
             if let Some(at) = quitting {
@@ -874,15 +915,14 @@ mod runner {
                     revents: 0,
                 })
                 .collect();
-            let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, 100) };
-            if ready <= 0 {
-                continue;
-            }
-            for (fd, mut file) in fds.iter().zip(files.iter()) {
+            let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, 50) };
+            let now = began.elapsed().as_millis() as Millis;
+            let mut actions = gestures.tick(now);
+            for (i, fd) in fds.iter().enumerate().filter(|_| ready > 0) {
                 if fd.revents & libc::POLLIN == 0 {
                     continue;
                 }
-                let Ok(read) = file.read(&mut buf) else {
+                let Ok(read) = (&files[i]).read(&mut buf) else {
                     continue;
                 };
                 for ev in buf[..read].chunks_exact(EVENT_BYTES).filter_map(decode) {
@@ -892,23 +932,108 @@ mod runner {
                         }
                         continue;
                     }
-                    if ev.kind != EV_KEY || ev.value != 1 {
-                        continue;
-                    }
-                    match keymap.btn(ev.code) {
-                        Some(Btn::Menu) if !sleep.asleep && quitting.is_none() => {
-                            eprintln!("slot: pico8: MENU, back to slot");
-                            unsafe { libc::kill(sleep.pid, libc::SIGTERM) };
-                            quitting = Some(Instant::now());
-                        }
-                        Some(Btn::Power) => {
+                    let raws = match hats[i].takes(ev) {
+                        true => hats[i].feed(ev),
+                        false => keymap.to_raw(ev).into_iter().collect(),
+                    };
+                    for raw in raws {
+                        if raw == RawEvent::Down(Btn::Power) {
                             let to = !sleep.asleep;
                             sleep.set(to, platform);
+                            continue;
                         }
-                        _ => {}
+                        actions.extend(gestures.feed(raw, now));
                     }
                 }
             }
+            if sleep.asleep || quitting.is_some() {
+                continue;
+            }
+            for action in actions {
+                match menu.act(action) {
+                    Step::Nothing => {}
+                    Step::Open => {
+                        stop(sleep.pid);
+                        sleep.held = true;
+                        saved = Saved::take();
+                        if overlay.is_none() {
+                            match Overlay::open() {
+                                Ok(o) => overlay = Some(o),
+                                Err(e) => eprintln!("slot: pico8: menu: {e}"),
+                            }
+                        }
+                        let (Some(o), Some(s)) = (overlay.as_mut(), saved.as_ref()) else {
+                            eprintln!("slot: pico8: menu: no screen, carrying on");
+                            menu = Menu::default();
+                            sleep.held = false;
+                            unsafe { libc::kill(sleep.pid, libc::SIGCONT) };
+                            continue;
+                        };
+                        eprintln!("slot: pico8: menu");
+                        for f in &files {
+                            grab(f, true);
+                        }
+                        gestures.set_context(Context::Menu);
+                        o.set_backdrop(s);
+                        if let Some(row) = menu.row() {
+                            o.draw(row, &hidden);
+                        }
+                    }
+                    Step::Moved => {
+                        if let (Some(o), Some(row)) = (overlay.as_mut(), menu.row()) {
+                            o.draw(row, &hidden);
+                        }
+                    }
+                    Step::Resume => {
+                        eprintln!("slot: pico8: menu: resume");
+                        if let Some(o) = &overlay {
+                            o.settle();
+                        }
+                        if let Some(s) = saved.take() {
+                            s.put_back();
+                        }
+                        for f in &files {
+                            grab(f, false);
+                        }
+                        gestures.set_context(Context::Game);
+                        sleep.held = false;
+                        unsafe { libc::kill(sleep.pid, libc::SIGCONT) };
+                    }
+                    Step::Quit => {
+                        eprintln!("slot: pico8: back to slot");
+                        for f in &files {
+                            grab(f, false);
+                        }
+                        unsafe {
+                            libc::kill(sleep.pid, libc::SIGTERM);
+                            libc::kill(sleep.pid, libc::SIGCONT);
+                        }
+                        quitting = Some(Instant::now());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Stops PICO-8 and waits, briefly, until it has: its last frame must be
+    /// on the screen before the framebuffer is copied.
+    fn stop(pid: libc::pid_t) {
+        unsafe { libc::kill(pid, libc::SIGSTOP) };
+        let stat = format!("/proc/{pid}/stat");
+        for _ in 0..40 {
+            let stopped = std::fs::read_to_string(&stat)
+                .ok()
+                .and_then(|s| {
+                    s.rsplit(')')
+                        .next()
+                        .map(|r| r.trim_start().starts_with('T'))
+                })
+                .unwrap_or(true);
+            if stopped {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
         }
     }
 
@@ -940,6 +1065,8 @@ mod runner {
         pid: libc::pid_t,
         brightness: u8,
         asleep: bool,
+        /// The menu has PICO-8 stopped: waking leaves it stopped.
+        held: bool,
     }
 
     impl Sleep {
@@ -956,7 +1083,9 @@ mod runner {
                 }
                 false => {
                     platform.set_backlight(self.brightness);
-                    unsafe { libc::kill(self.pid, libc::SIGCONT) };
+                    if !self.held {
+                        unsafe { libc::kill(self.pid, libc::SIGCONT) };
+                    }
                 }
             }
         }

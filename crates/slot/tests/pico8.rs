@@ -404,6 +404,10 @@ fn the_mapping_is_read_from_sysfs() {
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(lines[0].starts_with("19000000010000000200000000010000,H700 Gamepad,a:b1,b:b0,"));
     assert!(lines[0].contains("leftx:a0,lefty:a1"), "{}", lines[0]);
+    assert_eq!(
+        pico8::joystick_devices(Keymap::BaseOs, &dev, &sys),
+        dev.join("event1").display().to_string(),
+    );
 }
 
 fn to_pico8_shelf(a: &mut App) {

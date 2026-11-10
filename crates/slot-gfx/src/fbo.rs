@@ -373,6 +373,12 @@ impl Compositor {
         self.size
     }
 
+    /// Waits for the GPU to finish everything queued, so memory it draws
+    /// into can be written by someone else afterwards.
+    pub fn finish(&self) {
+        unsafe { gl::Finish() };
+    }
+
     pub fn read_frame(&self) -> Vec<u8> {
         let (w, h) = self.size;
         let stride = w as usize * 4;

@@ -51,6 +51,7 @@ pub mod pacer;
 pub mod panel_turn;
 pub mod persist;
 pub mod pico8;
+pub mod pico8_menu;
 pub mod editing;
 pub mod prefetch;
 pub mod print_scene;
