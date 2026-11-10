@@ -140,7 +140,7 @@ pub fn to_xrgb(rgba: &[u8]) -> Vec<u8> {
 }
 
 #[cfg(unix)]
-pub use screen::{grab, Overlay, Saved};
+pub use screen::{blank, grab, Overlay, Saved};
 
 #[cfg(unix)]
 mod screen {
@@ -160,31 +160,146 @@ mod screen {
 
     const FB: &str = "/dev/fb0";
     const FB_SYS: &str = "/sys/class/graphics/fb0";
+    /// How long `Saved::settled` waits between copies, a refresh and a bit,
+    /// and how many times it looks before taking the last.
+    const SETTLE_GAP: std::time::Duration = std::time::Duration::from_millis(20);
+    const SETTLE_TRIES: usize = 5;
     const EVIOCGRAB: u64 = 0x4004_4590;
     const FBIOGET_VSCREENINFO: u64 = 0x4600;
     const FBIOPAN_DISPLAY: u64 = 0x4606;
     /// How long the mouth takes to slide in or out: slot's footer slide.
     const SLIDE_S: f32 = crate::app::POWER_ON_S;
 
-    /// All of fb0's memory as PICO-8 left it, both of its buffers included.
+    /// fb0 mapped into memory, every row of its buffers.
+    ///
+    /// Everything that reads or writes fb0 goes through this rather than
+    /// read(2) and write(2). On this display a write(2) to /dev/fb0 lands in
+    /// the CPU's cache while the display reads memory, so lines not yet
+    /// written back showed an older frame as 16-pixel dashes until they
+    /// were, a couple of seconds later. fb0's own mapping is write-combined:
+    /// what goes into it is what the display shows.
+    struct Mapped {
+        ptr: *mut u8,
+        len: usize,
+    }
+
+    impl Mapped {
+        fn open() -> Option<Mapped> {
+            let stride: usize = std::fs::read_to_string(format!("{FB_SYS}/stride"))
+                .ok()?
+                .trim()
+                .parse()
+                .ok()?;
+            let len = stride.checked_mul(virtual_rows()?)?;
+            if len == 0 {
+                return None;
+            }
+            let fb = std::fs::OpenOptions::new().read(true).write(true).open(FB).ok()?;
+            let ptr = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    len,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED,
+                    fb.as_raw_fd(),
+                    0,
+                )
+            };
+            if ptr == libc::MAP_FAILED {
+                eprintln!("slot: pico8: menu: could not map fb0");
+                return None;
+            }
+            Some(Mapped {
+                ptr: ptr.cast(),
+                len,
+            })
+        }
+
+        fn bytes(&self) -> &[u8] {
+            unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+        }
+
+        fn bytes_mut(&mut self) -> &mut [u8] {
+            unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
+        }
+    }
+
+    impl Drop for Mapped {
+        fn drop(&mut self) {
+            unsafe { libc::munmap(self.ptr.cast(), self.len) };
+        }
+    }
+
+    /// Clears every buffer of fb0 to black, so nothing of PICO-8 or the menu
+    /// is left on screen while slot starts again.
+    pub fn blank() {
+        match Mapped::open() {
+            Some(mut fb) => fb.bytes_mut().fill(0),
+            None => {
+                let len = (|| {
+                    let stride: usize = std::fs::read_to_string(format!("{FB_SYS}/stride"))
+                        .ok()?
+                        .trim()
+                        .parse()
+                        .ok()?;
+                    Some(stride * virtual_rows()?)
+                })();
+                let blanked = len.map(|len| {
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(FB)
+                        .and_then(|mut f| f.write_all(&vec![0u8; len]))
+                });
+                if let Some(Err(e)) = blanked {
+                    eprintln!("slot: pico8: could not blank the screen: {e}");
+                }
+            }
+        }
+    }
+
+    /// All of fb0's buffers as PICO-8 left them.
     pub struct Saved {
         bytes: Vec<u8>,
     }
 
     impl Saved {
         pub fn take() -> Option<Saved> {
-            std::fs::read(FB).ok().map(|bytes| Saved { bytes })
+            Mapped::open().map(|fb| Saved {
+                bytes: fb.bytes().to_vec(),
+            })
+        }
+
+        /// A copy of fb0 once it has stopped changing. Stopping PICO-8 does
+        /// not stop the GPU, which can still be drawing PICO-8's last frame
+        /// into its other buffer. A copy taken mid-frame and put back later
+        /// leaves stale tiles the GPU will not draw again, since it skips
+        /// tiles it believes it already wrote: they show as lines until the
+        /// game redraws there.
+        pub fn settled() -> Option<Saved> {
+            let mut last = Saved::take()?;
+            for tries in 0..SETTLE_TRIES {
+                std::thread::sleep(SETTLE_GAP);
+                let next = Saved::take()?;
+                if next.bytes == last.bytes {
+                    if tries > 0 {
+                        eprintln!("slot: pico8: menu: the screen settled after {} copies", tries + 2);
+                    }
+                    return Some(next);
+                }
+                last = next;
+            }
+            eprintln!("slot: pico8: menu: the screen kept changing, using the last copy");
+            Some(last)
         }
 
         /// Writes the copy back, so the screen is what PICO-8 believes it is.
         pub fn put_back(&self) {
-            let written = std::fs::OpenOptions::new()
-                .write(true)
-                .open(FB)
-                .and_then(|mut f| f.write_all(&self.bytes));
-            if let Err(e) = written {
-                eprintln!("slot: pico8: menu: could not put the screen back: {e}");
-            }
+            let Some(mut fb) = Mapped::open() else {
+                eprintln!("slot: pico8: menu: could not put the screen back");
+                return;
+            };
+            let n = fb.len.min(self.bytes.len());
+            fb.bytes_mut()[..n].copy_from_slice(&self.bytes[..n]);
         }
 
         /// The frame on screen, as RGBA, when fb0 is 32-bit.
@@ -237,21 +352,26 @@ mod screen {
 
     /// Writes `rgba`, `w` by `h`, into the buffer starting at row `y0`.
     fn write_rows(rgba: &[u8], w: u32, h: u32, y0: usize) -> bool {
-        use std::os::unix::fs::FileExt as _;
         let Some((stride, _)) = front_buffer() else {
-            return false;
-        };
-        let Ok(fb) = std::fs::OpenOptions::new().write(true).open(FB) else {
             return false;
         };
         let row_bytes = w as usize * 4;
         if row_bytes > stride || rgba.len() < row_bytes * h as usize {
             return false;
         }
+        let Some(mut fb) = Mapped::open() else {
+            return false;
+        };
+        if (y0 + h as usize) * stride > fb.len {
+            return false;
+        }
         let rows = super::to_xrgb(rgba);
-        rows.chunks_exact(row_bytes)
-            .enumerate()
-            .all(|(y, row)| fb.write_all_at(row, ((y0 + y) * stride) as u64).is_ok())
+        let mem = fb.bytes_mut();
+        for (y, row) in rows.chunks_exact(row_bytes).enumerate() {
+            let at = (y0 + y) * stride;
+            mem[at..at + row_bytes].copy_from_slice(row);
+        }
+        true
     }
 
     /// Takes the input devices for the menu while it is open, so the stopped

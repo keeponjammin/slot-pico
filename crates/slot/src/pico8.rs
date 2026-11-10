@@ -1044,7 +1044,7 @@ mod runner {
                     Step::Open => {
                         stop(sleep.pid);
                         sleep.held = true;
-                        saved = Saved::take();
+                        saved = Saved::settled();
                         if overlay.is_none() {
                             match Overlay::open() {
                                 Ok(o) => overlay = Some(o),
@@ -1182,29 +1182,7 @@ mod runner {
     /// from black. Called again once PICO-8 is gone, in case it drew while
     /// quitting.
     fn blank_screen() {
-        use std::io::Write as _;
-        let sys =
-            |name: &str| std::fs::read_to_string(format!("/sys/class/graphics/fb0/{name}")).ok();
-        let len = (|| {
-            let stride: usize = sys("stride")?.trim().parse().ok()?;
-            let rows: usize = sys("virtual_size")?
-                .trim()
-                .split(',')
-                .nth(1)?
-                .parse()
-                .ok()?;
-            Some(stride * rows)
-        })();
-        let Some(len) = len else {
-            return;
-        };
-        let blanked = std::fs::OpenOptions::new()
-            .write(true)
-            .open("/dev/fb0")
-            .and_then(|mut fb| fb.write_all(&vec![0u8; len]));
-        if let Err(e) = blanked {
-            eprintln!("slot: pico8: could not blank the screen: {e}");
-        }
+        crate::pico8_menu::blank();
     }
 
     /// Stops PICO-8 and waits, briefly, until it has: its last frame must be
