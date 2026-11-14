@@ -1153,7 +1153,7 @@ mod runner {
         /// shim is there to take the HUD, else the first time the menu opens.
         Own,
         /// slot's own window, lent while PICO-8 plays.
-        Lent(Overlay),
+        Lent(Box<Overlay>),
     }
 
     /// How a game of PICO-8 ended.
@@ -1265,7 +1265,7 @@ mod runner {
         eprintln!("slot: pico8: playing at {}", at());
         let (mut overlay, lent) = match window {
             Window::Own => (None, false),
-            Window::Lent(o) => (Some(o), true),
+            Window::Lent(o) => (Some(*o), true),
         };
         let played = play_in(root, run, launch, &mut overlay, lent);
         Ended { overlay, played }
@@ -1524,7 +1524,6 @@ mod runner {
                 &slot_store::read_controls(root),
                 &slot_store::read_shortcuts(root),
                 &slot_store::read_carousel(root),
-                state.turbo,
             )
             .entries(),
         );
@@ -1686,7 +1685,7 @@ mod runner {
                         o.set_grade(state.blue_light, state.dim);
                         o.set_backdrop(s);
                         o.seat(root, state);
-                        o.set_status(platform.battery(), &clock_text(state));
+                        o.set_status(platform.battery(), state.battery_display, &clock_text(state));
                         let ready = asked.elapsed();
                         if let Some(row) = menu.row() {
                             o.show(row, &hidden);

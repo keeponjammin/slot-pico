@@ -5,12 +5,12 @@ use crate::hud::HUD_INK;
 use crate::icon::symbols_font;
 use crate::plate::UndoFace;
 use crate::power_menu::{MENU_H, MENU_INK, MENU_PAD};
-use crate::slot_chrome::MOUTH_H;
 use crate::quick_menu::{
-    draw_menu_ground, legend_y, visible_rows, DIM_INK, POINTER_BLEED, POINTER_GAP, QUICK_EDGE, QUICK_LABEL_X,
-    QUICK_PITCH, QUICK_VALUE_GAP, SCROLL_INSET, SCROLL_W, TYPE_DROP,
+    draw_menu_ground, legend_y, visible_rows, DIM_INK, POINTER_BLEED, POINTER_GAP, QUICK_EDGE,
+    QUICK_LABEL_X, QUICK_PITCH, QUICK_VALUE_GAP, SCROLL_INSET, SCROLL_W, TYPE_DROP,
     VALUE_MIN_SCALE,
 };
+use crate::slot_chrome::MOUTH_H;
 
 pub type NetFace = (TexId, u32, u32);
 
@@ -34,7 +34,7 @@ pub struct NetworkList<'a> {
     pub selected: usize,
     pub message: Option<NetFace>,
     pub pointer: Option<NetFace>,
-    pub ground: Option<(TexId, u32)>,
+    pub ground: Option<crate::MenuGround>,
     pub canvas: Canvas,
 }
 
@@ -350,7 +350,7 @@ pub fn pair_face(text: &str, slot: PairSlot, max_w: f32) -> UndoFace {
 pub struct PairScreen<'a> {
     pub qr: Option<NetFace>,
     pub lines: &'a [(PairSlot, NetFace)],
-    pub ground: Option<(TexId, u32)>,
+    pub ground: Option<crate::MenuGround>,
     pub canvas: Canvas,
 }
 
@@ -359,7 +359,12 @@ impl PairScreen<'_> {
         draw_menu_ground(self.canvas, self.ground, out);
         if let Some(face) = self.qr {
             let inset = (PAIR_QR.saturating_sub(face.1) / 2) as f32;
-            push(out, face, PAIR_X + inset, PAIR_TOP + self.canvas.inset_y() + inset);
+            push(
+                out,
+                face,
+                PAIR_X + inset,
+                PAIR_TOP + self.canvas.inset_y() + inset,
+            );
         }
         let Some(first) = self.lines.first() else {
             return;
@@ -379,7 +384,12 @@ impl PairScreen<'_> {
             .fold(top, f32::max);
         let shift = (self.canvas.h - MOUTH_H - (bottom - top)) / 2.0 - top;
         for (slot, face) in self.lines {
-            push(out, *face, self.canvas.centred(face.1 as f32), slot.y() + shift);
+            push(
+                out,
+                *face,
+                self.canvas.centred(face.1 as f32),
+                slot.y() + shift,
+            );
         }
     }
 }
