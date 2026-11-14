@@ -421,7 +421,7 @@ fn clock_screen(way: Way) -> (TempDir, App, Clock) {
     let (mut a, clock) = app_booting_at(d.path(), AT);
     if let Way::QuickMenu = way {
         a.apply(Action::QuickMenu);
-        for _ in 0..QuickRow::General.position(&[]) {
+        for _ in 0..QuickRow::System.position(&[]) {
             a.apply(Action::GbaDown(Btn::Down));
         }
         a.apply(Action::GbaDown(Btn::A));
@@ -591,5 +591,8 @@ fn picking_a_new_city_moves_the_cart_clock_with_it() {
     a.confirm_clock();
     let zone = read_slot_state(d.path()).zone;
     assert_ne!(zone, Zone::default());
-    assert_eq!(libc_offset_min(1_700_000_000), zone.offset_min(1_700_000_000));
+    assert_eq!(
+        libc_offset_min(1_700_000_000),
+        zone.offset_min(1_700_000_000)
+    );
 }

@@ -82,7 +82,7 @@ fn the_fast_forward_row_offers_off_a_slow_speed_and_the_four_ceilings() {
 fn the_rows_run_in_the_order_the_user_chose() {
     assert_eq!(
         QuickRow::MAIN.map(QuickRow::label),
-        ["General", "Screen", "Gameplay", "Controls", "Tools", "About"]
+        ["Shelf", "Gameplay", "Controls", "Screen", "Tools", "System"]
     );
     assert_eq!(
         QuickRow::GENERAL.map(QuickRow::label),
@@ -93,11 +93,20 @@ fn the_rows_run_in_the_order_the_user_chose() {
             "Shelf Mode",
             "Recents",
             "Game Titles",
-            "Lid Power Off",
             "Kid Mode",
-            "Kid Shelf",
+            "Kid Shelf"
+        ]
+    );
+    assert_eq!(
+        QuickRow::SYSTEM.map(QuickRow::label),
+        [
             "Wi-Fi",
-            "Date & Time"
+            "Date & Time",
+            "Nickname",
+            "Lid Power Off",
+            "Battery Display",
+            "Check for Updates",
+            "About"
         ]
     );
     assert_eq!(
@@ -163,11 +172,10 @@ fn the_rows_run_in_the_order_the_user_chose() {
             "Fast Forward",
             "Fast Forward Sound",
             "Rewind",
-            "Turbo Buttons",
             "Rumble",
             "Left Stick as D-Pad",
-            "Auto Load State",
-            "Eject Save State"
+            "Resume on Insert",
+            "Resume on Power On"
         ]
     );
     let opens: Vec<QuickRow> = QuickRow::ALL.into_iter().filter(|r| r.opens()).collect();
@@ -209,10 +217,12 @@ fn the_rows_run_in_the_order_the_user_chose() {
             QuickRow::CheckUpdates,
             QuickRow::Server,
             QuickRow::Romm,
+            QuickRow::Nickname,
             QuickRow::RommServer,
             QuickRow::RommPort,
             QuickRow::RommPair,
             QuickRow::RommDisconnect,
+            QuickRow::System,
             QuickRow::ScreenPico8
         ]
     );
@@ -222,6 +232,7 @@ fn the_rows_run_in_the_order_the_user_chose() {
         &QuickRow::SCREEN_GENERAL[..],
         &QuickRow::GAME[..],
         &QuickRow::GENERAL[..],
+        &QuickRow::SYSTEM[..],
         &QuickRow::NETWORK[..],
         &QuickRow::ROMM[..],
         &QuickRow::PLAY[..],
@@ -242,7 +253,7 @@ fn a_hidden_row_is_stepped_over_and_takes_no_place() {
     let hidden = [QuickRow::WallpaperTint, QuickRow::DateTime];
     assert_eq!(QuickRow::Wallpaper.down(&hidden), QuickRow::ShelfMode);
     assert_eq!(QuickRow::ShelfMode.up(&hidden), QuickRow::Wallpaper);
-    assert_eq!(QuickRow::Theme.up(&hidden), QuickRow::Wifi);
+    assert_eq!(QuickRow::Theme.up(&hidden), QuickRow::KidShelf);
     assert_eq!(QuickRow::ShelfMode.position(&hidden), 2);
     assert_eq!(QuickRow::Wallpaper.down(&[]), QuickRow::WallpaperTint);
     assert_eq!(QuickRow::ShelfMode.position(&[]), 3);
@@ -312,9 +323,9 @@ fn the_values_read_as_the_menu_prints_them() {
             "Collections",
             "One Shelf",
             "Shelves",
-            "Always",
-            "Power On",
-            "Never",
+            "Both",
+            "Icon",
+            "Percentage",
         ]
     );
     assert_eq!(QuickValue::flag(true), QuickValue::On);
@@ -487,6 +498,7 @@ fn in_game_rows_read_as_the_menu_shows_them() {
         assert!(!row.centred(), "{row:?}");
     }
     assert!(QuickRow::General.centred());
+    assert!(QuickRow::System.centred());
     assert!(!QuickRow::Rumble.centred());
 }
 
@@ -512,11 +524,46 @@ fn a_hidden_palette_and_bezel_leave_nine_screen_rows() {
 
 #[test]
 fn the_in_game_screen_panel_shows_three_rows_and_scrolls_the_rest() {
-    assert_eq!(slot_ui::quick_window(slot_ui::Canvas::FRAMED, QuickRow::Shader, &[QuickRow::Overlay]), (0, 3));
-    assert_eq!(slot_ui::quick_window(slot_ui::Canvas::FRAMED, QuickRow::Bezel, &[QuickRow::Overlay]), (0, 3));
-    assert_eq!(slot_ui::quick_window(slot_ui::Canvas::FRAMED, QuickRow::Scale, &[QuickRow::Overlay]), (1, 3));
-    assert_eq!(slot_ui::quick_window(slot_ui::Canvas::FRAMED, QuickRow::Stretch, &[QuickRow::Overlay]), (2, 3));
-    assert_eq!(slot_ui::quick_window(slot_ui::Canvas::FRAMED, QuickRow::PlayContrast, &[QuickRow::Overlay]), (8, 3));
+    assert_eq!(
+        slot_ui::quick_window(
+            slot_ui::Canvas::FRAMED,
+            QuickRow::Shader,
+            &[QuickRow::Overlay]
+        ),
+        (0, 3)
+    );
+    assert_eq!(
+        slot_ui::quick_window(
+            slot_ui::Canvas::FRAMED,
+            QuickRow::Bezel,
+            &[QuickRow::Overlay]
+        ),
+        (0, 3)
+    );
+    assert_eq!(
+        slot_ui::quick_window(
+            slot_ui::Canvas::FRAMED,
+            QuickRow::Scale,
+            &[QuickRow::Overlay]
+        ),
+        (1, 3)
+    );
+    assert_eq!(
+        slot_ui::quick_window(
+            slot_ui::Canvas::FRAMED,
+            QuickRow::Stretch,
+            &[QuickRow::Overlay]
+        ),
+        (2, 3)
+    );
+    assert_eq!(
+        slot_ui::quick_window(
+            slot_ui::Canvas::FRAMED,
+            QuickRow::PlayContrast,
+            &[QuickRow::Overlay]
+        ),
+        (8, 3)
+    );
     let hidden = [QuickRow::Palette, QuickRow::Bezel, QuickRow::Overlay];
     assert_eq!(
         slot_ui::quick_window(slot_ui::Canvas::FRAMED, QuickRow::PlayContrast, &hidden),
@@ -526,7 +573,12 @@ fn the_in_game_screen_panel_shows_three_rows_and_scrolls_the_rest() {
 
 #[test]
 fn a_scroll_bar_shows_only_on_a_page_with_rows_out_of_sight() {
-    let top = slot_ui::quick_scroll(slot_ui::Canvas::FRAMED, QuickRow::Shader, &[QuickRow::Overlay]).expect("eleven rows in three");
+    let top = slot_ui::quick_scroll(
+        slot_ui::Canvas::FRAMED,
+        QuickRow::Shader,
+        &[QuickRow::Overlay],
+    )
+    .expect("eleven rows in three");
     assert!(
         (top.thumb_y - top.y).abs() < 0.5,
         "the thumb is not at the top"
@@ -535,16 +587,29 @@ fn a_scroll_bar_shows_only_on_a_page_with_rows_out_of_sight() {
         (top.thumb_h - top.h / 11.0).abs() < 0.5,
         "the thumb is not one row of eleven"
     );
-    let end = slot_ui::quick_scroll(slot_ui::Canvas::FRAMED, QuickRow::PlayContrast, &[QuickRow::Overlay]).expect("eleven rows in three");
+    let end = slot_ui::quick_scroll(
+        slot_ui::Canvas::FRAMED,
+        QuickRow::PlayContrast,
+        &[QuickRow::Overlay],
+    )
+    .expect("eleven rows in three");
     assert!(
         (end.thumb_y + end.thumb_h - (end.y + end.h)).abs() < 0.5,
         "the thumb is not at the bottom"
     );
     assert!(
-        slot_ui::quick_scroll(slot_ui::Canvas::FRAMED, QuickRow::Shader, &[QuickRow::Palette, QuickRow::Bezel, QuickRow::Overlay]).is_some(),
+        slot_ui::quick_scroll(
+            slot_ui::Canvas::FRAMED,
+            QuickRow::Shader,
+            &[QuickRow::Palette, QuickRow::Bezel, QuickRow::Overlay]
+        )
+        .is_some(),
         "nine rows in three still scroll"
     );
-    assert_eq!(slot_ui::quick_scroll(slot_ui::Canvas::FRAMED, QuickRow::Rumble, &[]), None);
+    assert_eq!(
+        slot_ui::quick_scroll(slot_ui::Canvas::FRAMED, QuickRow::Rumble, &[]),
+        None
+    );
     assert!(slot_ui::quick_scroll(slot_ui::Canvas::FRAMED, QuickRow::GameUp, &[]).is_some());
 }
 
@@ -553,7 +618,8 @@ fn the_thumb_reaches_the_bottom_only_on_the_last_row() {
     let rows = QuickRow::CONTROLS;
     let mut last_y = f32::MIN;
     for (i, row) in rows.iter().enumerate() {
-        let bar = slot_ui::quick_scroll(slot_ui::Canvas::FRAMED, *row, &[]).expect("the controls page scrolls");
+        let bar = slot_ui::quick_scroll(slot_ui::Canvas::FRAMED, *row, &[])
+            .expect("the controls page scrolls");
         let at_bottom = (bar.thumb_y + bar.thumb_h - (bar.y + bar.h)).abs() < 0.5;
         assert_eq!(at_bottom, i == rows.len() - 1, "{row:?} at {i}");
         assert!(bar.thumb_y > last_y, "{row:?}: the thumb did not move down");
@@ -617,6 +683,48 @@ fn show_titles_sits_under_recents_on_the_general_page() {
 }
 
 #[test]
+fn the_battery_display_sits_above_check_for_updates_on_the_system_page() {
+    let at = |r: QuickRow| QuickRow::SYSTEM.iter().position(|g| *g == r);
+    assert_eq!(
+        at(QuickRow::CheckUpdates),
+        at(QuickRow::BatteryDisplay).map(|i| i + 1)
+    );
+    assert_eq!(QuickRow::BatteryDisplay.label(), "Battery Display");
+    assert_eq!(QuickRow::BatteryDisplay.parent(), Some(QuickRow::System));
+    assert!(!QuickRow::BatteryDisplay.opens());
+    assert_eq!(
+        [QuickValue::Both, QuickValue::Icon, QuickValue::Percentage].map(QuickValue::text),
+        ["Both", "Icon", "Percentage"]
+    );
+}
+
+#[test]
+fn system_holds_wifi_the_clock_lid_power_off_updates_and_about() {
+    assert_eq!(QuickRow::MAIN.last(), Some(&QuickRow::System));
+    assert!(!QuickRow::MAIN.contains(&QuickRow::About));
+    assert_eq!(QuickRow::System.child(), Some(QuickRow::Wifi));
+    for row in QuickRow::SYSTEM {
+        assert_eq!(row.parent(), Some(QuickRow::System), "{row:?}");
+        assert!(!QuickRow::GENERAL.contains(&row), "{row:?}");
+    }
+    let at = |r: QuickRow| QuickRow::SYSTEM.iter().position(|g| *g == r);
+    assert_eq!(
+        at(QuickRow::Nickname),
+        at(QuickRow::DateTime).map(|i| i + 1)
+    );
+    assert_eq!(QuickRow::SYSTEM.last(), Some(&QuickRow::About));
+    assert_eq!(QuickRow::Nickname.parent(), Some(QuickRow::System));
+    assert!(!QuickRow::NETWORK.contains(&QuickRow::Nickname));
+    assert_eq!(QuickRow::WifiPower.parent(), Some(QuickRow::Wifi));
+    assert_eq!(QuickRow::CheckUpdates.parent(), Some(QuickRow::System));
+    assert!(!QuickRow::BatteryDisplay.opens());
+    assert_eq!(
+        [QuickValue::Both, QuickValue::Icon, QuickValue::Percentage].map(QuickValue::text),
+        ["Both", "Icon", "Percentage"]
+    );
+}
+
+#[test]
 fn fetch_legends_are_built_like_the_other_prompts() {
     let ink = [240, 240, 232];
     let [cancel, pick] = slot_ui::fetch_choice_legends(ink);
@@ -629,11 +737,8 @@ fn fetch_legends_are_built_like_the_other_prompts() {
 }
 
 #[test]
-fn fetch_art_sits_above_check_for_updates_on_the_network_page() {
-    assert_eq!(
-        slot_ui::QuickRow::NETWORK.last(),
-        Some(&slot_ui::QuickRow::CheckUpdates)
-    );
+fn fetch_art_sits_below_romm_on_the_tools_page() {
+    assert!(!slot_ui::QuickRow::NETWORK.contains(&slot_ui::QuickRow::CheckUpdates));
     assert_eq!(slot_ui::QuickRow::NETWORK[2], slot_ui::QuickRow::FetchArt);
     assert_eq!(slot_ui::QuickRow::FetchArt.label(), "Fetch Missing Art");
     assert!(slot_ui::QuickRow::FetchArt.opens());
@@ -657,6 +762,7 @@ fn skip_keeps_its_button_on_the_outer_edge() {
 #[test]
 fn server_sits_first_on_the_tools_page() {
     assert_eq!(QuickRow::NETWORK[0], QuickRow::Server);
+    assert_eq!(QuickRow::Network.child(), Some(QuickRow::Server));
     assert!(!QuickRow::MAIN.contains(&QuickRow::Server));
     assert_eq!(QuickRow::Server.parent(), Some(QuickRow::Network));
     assert_eq!(QuickRow::MAIN.len(), 6);
@@ -669,12 +775,19 @@ fn server_sits_first_on_the_tools_page() {
 }
 
 #[test]
-fn the_wifi_row_holds_its_place_when_the_rest_of_the_network_page_hides() {
+fn the_wifi_row_holds_its_place_when_the_tools_page_hides() {
     let all = slot_ui::quick_row_top(slot_ui::Canvas::FRAMED, QuickRow::WifiPower, &[]);
-    let off: Vec<QuickRow> = QuickRow::NETWORK[1..].to_vec();
-    assert_eq!(slot_ui::quick_row_top(slot_ui::Canvas::FRAMED, QuickRow::WifiPower, &off), all);
+    let off: Vec<QuickRow> = QuickRow::NETWORK.to_vec();
     assert_eq!(
-        slot_ui::quick_row_top(slot_ui::Canvas::FRAMED, QuickRow::WifiPower, &[QuickRow::Server]),
+        slot_ui::quick_row_top(slot_ui::Canvas::FRAMED, QuickRow::WifiPower, &off),
+        all
+    );
+    assert_eq!(
+        slot_ui::quick_row_top(
+            slot_ui::Canvas::FRAMED,
+            QuickRow::WifiPower,
+            &[QuickRow::Server]
+        ),
         all
     );
 }
@@ -740,6 +853,16 @@ fn tools_labels() -> Vec<&'static str> {
     if cfg!(feature = "nds") {
         labels.push("Fetch Box Art");
     }
-    labels.push("Check for Updates");
     labels
+}
+
+#[test]
+fn every_row_sits_in_all_at_its_own_index() {
+    for (i, row) in QuickRow::ALL.iter().enumerate() {
+        assert_eq!(
+            row.index(),
+            i,
+            "{row:?} is declared out of step with QuickRow::ALL, so it would draw another row's label"
+        );
+    }
 }

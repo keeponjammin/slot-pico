@@ -958,11 +958,8 @@ fn pico8_keeps_its_own_screen_settings_apart_from_the_game_boy_colors() {
     assert!(a.stretch_choices(Platform::Pico8).is_empty());
     assert!(!a.colour_correction_for(Platform::Pico8));
     assert_eq!(a.blending_for(Platform::Pico8), slot_store::Blending::Off);
-    assert_eq!(
-        slot_store::GameButton::of(Platform::Pico8)
-            .iter()
-            .any(|b| *b == slot_store::GameButton::Select),
-        false,
+    assert!(
+        !slot_store::GameButton::of(Platform::Pico8).contains(&slot_store::GameButton::Select),
         "PICO-8 has no select button"
     );
 }

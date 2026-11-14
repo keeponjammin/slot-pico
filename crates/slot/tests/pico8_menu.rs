@@ -120,11 +120,10 @@ fn the_shims_tint_comes_off_within_a_level() {
             .chain([255])
             .collect();
         let back = slot::pico8_menu::untint(&tinted, gain);
-        for i in 0..3 {
+        for (i, channel) in back.iter().take(3).enumerate() {
             assert!(
-                (i32::from(back[i]) - i32::from(c)).abs() <= 2,
-                "channel {i}: {c} came back as {}",
-                back[i]
+                (i32::from(*channel) - i32::from(c)).abs() <= 2,
+                "channel {i}: {c} came back as {channel}"
             );
         }
     }
