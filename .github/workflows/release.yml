@@ -53,30 +53,30 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   checks:
-    name: lint and tests
+    name: PICO-8 tests
     needs: version
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Task and cargo-nextest
-        run: |
-          set -eu
-          mkdir -p "$HOME/.local/bin"
-          curl -fsSL https://taskfile.dev/install.sh | sh -s -- -b "$HOME/.local/bin"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          curl -LsSf https://get.nexte.st/latest/mac | tar zxf - -C "$HOME/.local/bin"
+      - name: Install ALSA and udev headers
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
 
       - uses: Swatinem/rust-cache@v2
 
-      - run: task lint
-      - run: task lint:device
-      - run: task test
-      - run: task test:card
+      # Only what this fork adds: slot itself is tested upstream before it is released.
+      - name: Test PICO-8 and the fork's updater
+        env:
+          SLOT_SILENT: '1'
+        run: >-
+          cargo test --no-fail-fast
+          -p slot --test pico8 --test pico8_menu --test pico8_hud --test fake08 --test update
+          -p slot-ui --test cart --test board
+          -p slot-store --test platform
 
   build:
     name: card tree
-    needs: [version, checks]
+    needs: version
     env:
       TAG: ${{ needs.version.outputs.tag }}
       SLOT_VERSION: ${{ inputs.version }}
@@ -146,7 +146,7 @@ jobs:
 
   publish:
     name: release
-    needs: [version, build]
+    needs: [version, checks, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
