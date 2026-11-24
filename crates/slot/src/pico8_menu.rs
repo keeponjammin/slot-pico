@@ -644,6 +644,7 @@ mod screen {
     /// any game while its menu is open.
     struct Status {
         battery: Option<slot_power::Battery>,
+        display: slot_store::BatteryDisplay,
         percent: (TexId, u32),
         clock: (TexId, u32),
         bolt: TexId,
@@ -832,7 +833,12 @@ mod screen {
 
         /// The battery and the time for the top corners, in the ink slot
         /// gives them over a game.
-        pub fn set_status(&mut self, battery: Option<slot_power::Battery>, clock: &str) {
+        pub fn set_status(
+            &mut self,
+            battery: Option<slot_power::Battery>,
+            display: slot_store::BatteryDisplay,
+            clock: &str,
+        ) {
             let ink = footer_ink(false);
             let c = &mut self.compositor;
             let mut put = |face: UndoFace, old: Option<(TexId, u32)>| match old {
@@ -855,6 +861,7 @@ mod screen {
             };
             self.kept.status = Some(Status {
                 battery,
+                display,
                 percent,
                 clock,
                 bolt,
@@ -928,6 +935,7 @@ mod screen {
                     networks: None,
                     romm: [None; 4],
                     kid_shelf: None,
+                    nickname: None,
                     faces: Some(&self.kept.faces),
                     ground: None,
                     palette: None,
@@ -951,8 +959,11 @@ mod screen {
                 if let Some(s) = &self.kept.status {
                     draw_corners(
                         canvas,
-                        s.battery,
-                        Printed::new(s.percent.0, s.percent.1),
+                        slot_ui::Gauge {
+                            battery: s.battery,
+                            percent: Printed::new(s.percent.0, s.percent.1),
+                            display: s.display,
+                        },
                         Some(s.bolt),
                         Printed::new(s.clock.0, s.clock.1),
                         &mut out,

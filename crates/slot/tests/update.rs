@@ -2,8 +2,8 @@ use std::io::{Cursor, Read, Write};
 
 use slot::update::{
     check_with, clean_baseos, clock_is_wrong, install_baseos_with, install_with, newer,
-    parse_baseos, parse_release, Device, read_counted, stage, verify, wifi_conf, will_apply, Kind, Release,
-    Running, Stoppable, Ticket, UpdateEvent, UpdateFail,
+    parse_baseos, parse_release, read_counted, stage, verify, wifi_conf, will_apply, Device, Kind,
+    Release, Running, Stoppable, Ticket, UpdateEvent, UpdateFail,
 };
 
 const DIGEST: &str = "e78b2771abbc41a07774fe870e08d3d870c1a06c6db42a1d799626190156aba5";
@@ -166,7 +166,7 @@ fn parse_release_reads_the_version_url_and_digest() {
     assert_eq!(r.version, "1.11.0");
     assert_eq!(
         r.url,
-        "https://github.com/slot-cfw/slot/releases/download/v1.11.0/slot-v1.11.0-h700.zip"
+        "https://github.com/keeponjammin/slot-pico/releases/download/v1.11.0/slot-v1.11.0-h700.zip"
     );
     assert_eq!(r.size, 6919551);
     assert_eq!(&r.sha256[..2], &[0xe7, 0x8b]);
@@ -180,7 +180,10 @@ fn parse_release_refuses_a_release_without_the_h700_zip() {
 
 #[test]
 fn parse_release_refuses_a_manifest_without_stable() {
-    assert_eq!(parse_release(r#"{"beta": {}}"#, Device::H700), Err(UpdateFail::Bad));
+    assert_eq!(
+        parse_release(r#"{"beta": {}}"#, Device::H700),
+        Err(UpdateFail::Bad)
+    );
 }
 
 #[test]
@@ -196,6 +199,15 @@ fn newer_compares_numerically() {
     assert!(!newer("1.11.0", "1.11.0"));
     assert!(!newer("1.11.0", "1.12.0"));
     assert!(!newer("1.12.0-rc1", "1.11.0"));
+}
+
+#[test]
+fn a_fork_release_counts_on_from_the_slot_release_it_carries() {
+    assert!(newer("1.16.0.1", "1.16.0"));
+    assert!(newer("1.16.0.2", "1.16.0.1"));
+    assert!(newer("1.16.1", "1.16.0.3"));
+    assert!(newer("1.16.1.1", "1.16.1"));
+    assert!(!newer("1.16.0", "1.16.0.1"));
 }
 
 #[test]
@@ -596,16 +608,14 @@ fn clean_baseos_removes_only_our_stale_files() {
     }
 }
 
-fn ranged(
-    body: &[u8],
-    chunk: u64,
-    short_at: Option<u64>,
-) -> (
+type Ranged = (
     Result<[u8; 32], UpdateFail>,
     Vec<u8>,
     Vec<(u64, u64)>,
     Vec<u64>,
-) {
+);
+
+fn ranged(body: &[u8], chunk: u64, short_at: Option<u64>) -> Ranged {
     let mut asked = Vec::new();
     let mut out = Vec::new();
     let mut seen = Vec::new();
@@ -716,7 +726,7 @@ fn parse_release_gives_the_ds_plus_its_own_zip() {
     assert_eq!(r.version, "1.11.0");
     assert_eq!(
         r.url,
-        "https://github.com/slot-cfw/slot/releases/download/v1.11.0/slot-v1.11.0-rgdsplus.zip"
+        "https://github.com/keeponjammin/slot-pico/releases/download/v1.11.0/slot-v1.11.0-rgdsplus.zip"
     );
     assert_eq!(r.size, 8000000);
     assert_eq!(&r.sha256[..2], &[0xaa, 0x8b]);
@@ -725,13 +735,20 @@ fn parse_release_gives_the_ds_plus_its_own_zip() {
 #[test]
 fn parse_release_keeps_the_h700_zip_for_the_sps() {
     let r = parse_release(&both_zips(), Device::H700).unwrap();
-    assert!(r.url.ends_with("/v1.11.0/slot-v1.11.0-h700.zip"), "{}", r.url);
+    assert!(
+        r.url.ends_with("/v1.11.0/slot-v1.11.0-h700.zip"),
+        "{}",
+        r.url
+    );
     assert_eq!(r.size, 6919551);
 }
 
 #[test]
 fn a_ds_plus_refuses_a_manifest_without_its_zip() {
-    assert_eq!(parse_release(&v1_11(), Device::RgDsPlus), Err(UpdateFail::Bad));
+    assert_eq!(
+        parse_release(&v1_11(), Device::RgDsPlus),
+        Err(UpdateFail::Bad)
+    );
 }
 
 #[test]
@@ -762,5 +779,9 @@ fn a_check_on_the_ds_plus_offers_the_ds_plus_zip() {
     let UpdateEvent::Available(offers) = event else {
         panic!("no offer: {event:?}");
     };
-    assert!(offers[0].url.ends_with("slot-v1.11.0-rgdsplus.zip"), "{}", offers[0].url);
+    assert!(
+        offers[0].url.ends_with("slot-v1.11.0-rgdsplus.zip"),
+        "{}",
+        offers[0].url
+    );
 }

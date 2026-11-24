@@ -166,40 +166,47 @@ impl WallpaperTint {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
-pub enum AutoLoad {
+pub enum BatteryDisplay {
     #[default]
-    Always,
-    PowerOn,
-    Never,
+    Both,
+    Icon,
+    Percent,
 }
 
-impl AutoLoad {
-    pub const ALL: [AutoLoad; 3] = [AutoLoad::Always, AutoLoad::PowerOn, AutoLoad::Never];
+impl BatteryDisplay {
+    pub const ALL: [BatteryDisplay; 3] = [
+        BatteryDisplay::Both,
+        BatteryDisplay::Icon,
+        BatteryDisplay::Percent,
+    ];
 
     pub fn key(self) -> &'static str {
         match self {
-            AutoLoad::Always => "1",
-            AutoLoad::PowerOn => "power",
-            AutoLoad::Never => "0",
+            BatteryDisplay::Both => "both",
+            BatteryDisplay::Icon => "icon",
+            BatteryDisplay::Percent => "percent",
         }
     }
 
-    pub fn parse(value: &str) -> Option<AutoLoad> {
-        AutoLoad::ALL.into_iter().find(|a| a.key() == value)
+    pub fn parse(value: &str) -> Option<BatteryDisplay> {
+        BatteryDisplay::ALL.into_iter().find(|d| d.key() == value)
     }
 
-    pub fn on_insert(self) -> bool {
-        self == AutoLoad::Always
+    pub fn icon(self) -> bool {
+        self != BatteryDisplay::Percent
     }
 
-    pub fn at_power_on(self) -> bool {
-        self != AutoLoad::Never
+    pub fn percent(self) -> bool {
+        self != BatteryDisplay::Icon
     }
 
-    pub fn step(self, right: bool) -> AutoLoad {
-        let n = AutoLoad::ALL.len();
-        let at = AutoLoad::ALL.iter().position(|a| *a == self).unwrap_or(0);
-        AutoLoad::ALL[if right {
+    pub fn step(self, right: bool) -> BatteryDisplay {
+        let n = BatteryDisplay::ALL.len();
+        let at = BatteryDisplay::ALL
+            .iter()
+            .position(|d| *d == self)
+            .unwrap_or(0);
+        BatteryDisplay::ALL[if right {
             (at + 1) % n
         } else {
             (at + n - 1) % n
@@ -234,9 +241,9 @@ impl WallpaperPick {
         match self {
             WallpaperPick::None => "None".to_string(),
             WallpaperPick::Random => "Random".to_string(),
-            WallpaperPick::Shelf => "Shelf".to_string(),
-            WallpaperPick::Default => "Default".to_string(),
-            WallpaperPick::Blur => "DEFAULT BLUR".to_string(),
+            WallpaperPick::Shelf => "Per Shelf".to_string(),
+            WallpaperPick::Default => "Slot".to_string(),
+            WallpaperPick::Blur => "Slot Blur".to_string(),
             WallpaperPick::File(name) => name
                 .rsplit_once('.')
                 .map(|(stem, _)| stem)
@@ -394,24 +401,14 @@ pub enum Blending {
 }
 
 impl Blending {
-    pub const MGBA: [Blending; 3] = [Blending::Off, Blending::Mix, Blending::Ghosting];
-    pub const GPSP: [Blending; 2] = [Blending::Off, Blending::Mix];
+    pub const ALL: [Blending; 3] = [Blending::Off, Blending::Mix, Blending::Ghosting];
 
     pub fn choices(core: Core) -> &'static [Blending] {
         match core {
-            Core::Mgba => &Blending::MGBA,
-            Core::Gpsp => &Blending::GPSP,
-            Core::Gambatte => &Blending::MGBA,
+            Core::Mgba | Core::Gpsp | Core::Gambatte => &Blending::ALL,
             Core::Fake08 | Core::Pico8 => &[Blending::Off],
             #[cfg(feature = "nds")]
             Core::Dsperate => &[Blending::Off],
-        }
-    }
-
-    pub fn on(self, core: Core) -> Blending {
-        match (core, self) {
-            (Core::Gpsp, Blending::Ghosting) => Blending::Mix,
-            (_, blending) => blending,
         }
     }
 
@@ -424,7 +421,7 @@ impl Blending {
     }
 
     pub fn parse(value: &str) -> Option<Blending> {
-        Blending::MGBA.into_iter().find(|b| b.key() == value)
+        Blending::ALL.into_iter().find(|b| b.key() == value)
     }
 
     pub fn step(self, choices: &[Blending], right: bool) -> Blending {
@@ -468,18 +465,20 @@ pub struct SlotState {
     /// frame blending, bezels or overlays, and borrows none of the Game Boy's settings.
     pub shader_pico8: Shader,
     pub scale_pico8: Scale,
-    pub auto_load: AutoLoad,
-    pub eject_save: bool,
-    pub turbo: bool,
+    pub resume_insert: bool,
+    pub resume_power_on: bool,
     pub rewind: bool,
     pub gb_palettes: bool,
     pub gb_palette: GbPalette,
     pub appearance: Appearance,
     pub wallpaper: WallpaperPick,
     pub wallpaper_tint: WallpaperTint,
+    pub wallpapers_given: bool,
     pub show_recents: bool,
     pub show_titles: bool,
+    pub battery_display: BatteryDisplay,
     pub wifi_off: bool,
+    pub nickname: String,
     pub gb_core: Core,
     pub left_stick_dpad: bool,
     pub lid_off_min: Option<u8>,
@@ -660,18 +659,20 @@ impl Default for SlotState {
             shader_gbc: Shader::Simpletex,
             shader_pico8: Shader::Off,
             scale_pico8: Scale::Integer,
-            auto_load: AutoLoad::Always,
-            eject_save: true,
-            turbo: true,
+            resume_insert: true,
+            resume_power_on: true,
             rewind: true,
             gb_palettes: false,
             gb_palette: GbPalette::DEFAULT,
             appearance: Appearance::Dark,
             wallpaper: WallpaperPick::Default,
             wallpaper_tint: WallpaperTint::Off,
+            wallpapers_given: false,
             show_recents: false,
             show_titles: false,
+            battery_display: BatteryDisplay::Both,
             wifi_off: false,
+            nickname: String::new(),
             gb_core: Core::Gambatte,
             left_stick_dpad: true,
             lid_off_min: None,
@@ -706,6 +707,14 @@ impl Default for SlotState {
 
 fn state_path(root: &Path) -> PathBuf {
     root.join("Config").join("slot.state")
+}
+
+pub fn legacy_turbo_off(root: &Path) -> bool {
+    std::fs::read_to_string(state_path(root)).is_ok_and(|text| {
+        text.lines()
+            .filter_map(|l| l.split_once('='))
+            .any(|(key, value)| key.trim() == "turbo" && flag(value.trim()) == Some(false))
+    })
 }
 
 const RECENTS_FILE: &str = "recents.txt";
@@ -752,7 +761,7 @@ fn write_list(root: &Path, name: &str, list: &[Recent]) -> std::io::Result<()> {
 
 pub fn write_slot_state(root: &Path, s: &SlotState) -> std::io::Result<()> {
     let mut text = format!(
-        "cart={}\ncart_platform={}\nbrightness={}\nblue_light={}\nvolume={}\nvolume_hp={}\nmuted={}\nmuted_hp={}\nclock_set={}\nzone={}\nclock_24h={}\nnetwork_time={}\nrumble={}\nff_speed={}\nff_sound={}\ncolour_correction_gba={}\ncolour_correction_gb={}\nshader_gba={}\nshader_gb={}\neject_save={}\nturbo={}\nrewind={}\ngb_palettes={}\ngb_palette={}\nappearance={}\nwallpaper={}\n",
+        "cart={}\ncart_platform={}\nbrightness={}\nblue_light={}\nvolume={}\nvolume_hp={}\nmuted={}\nmuted_hp={}\nclock_set={}\nzone={}\nclock_24h={}\nnetwork_time={}\nrumble={}\nff_speed={}\nff_sound={}\ncolour_correction_gba={}\ncolour_correction_gb={}\nshader_gba={}\nshader_gb={}\nrewind={}\ngb_palettes={}\ngb_palette={}\nappearance={}\nwallpaper={}\n",
         s.cart.as_deref().unwrap_or(""),
         s.cart_platform.map_or(String::new(), platform_key),
         s.brightness,
@@ -772,8 +781,6 @@ pub fn write_slot_state(root: &Path, s: &SlotState) -> std::io::Result<()> {
         s.colour_correction_gb as u8,
         s.shader_gba.name(),
         s.shader_gb.name(),
-        s.eject_save as u8,
-        s.turbo as u8,
         s.rewind as u8,
         s.gb_palettes as u8,
         s.gb_palette.core_name(),
@@ -791,25 +798,43 @@ pub fn write_slot_state(root: &Path, s: &SlotState) -> std::io::Result<()> {
     text.push_str(&format!("saturation={}\n", s.saturation));
     text.push_str(&format!("contrast={}\n", s.contrast));
     text.push_str(&format!("wallpaper_tint={}\n", s.wallpaper_tint.key()));
+    text.push_str(&format!("wallpapers_given={}\n", s.wallpapers_given as u8));
     text.push_str(&format!("show_recents={}\n", s.show_recents as u8));
     text.push_str(&format!("show_titles={}\n", s.show_titles as u8));
+    text.push_str(&format!("battery_display={}\n", s.battery_display.key()));
     if s.wifi_off {
         text.push_str("wifi_off=1\n");
     }
+    if !s.nickname.is_empty() {
+        text.push_str(&format!("nickname={}\n", s.nickname));
+    }
     text.push_str(&format!("gb_core={}\n", s.gb_core.as_str()));
     text.push_str(&format!("left_stick_dpad={}\n", s.left_stick_dpad as u8));
-    text.push_str(&format!("auto_load={}\n", s.auto_load.key()));
+    text.push_str(&format!("resume_insert={}\n", s.resume_insert as u8));
+    text.push_str(&format!("resume_power_on={}\n", s.resume_power_on as u8));
     if let Some(min) = s.lid_off_min {
         text.push_str(&format!("lid_off_min={min}\n"));
     }
     text.push_str(&format!("bezel_gba={}\n", s.bezel_gba.key()));
     text.push_str(&format!("bezel_gb={}\n", s.bezel_gb.key()));
     text.push_str(&format!("bezel_gbc={}\n", s.bezel_gbc.key()));
-    text.push_str(&format!("overlay_gba={}\n", s.overlay_gba.as_deref().unwrap_or_default()));
-    text.push_str(&format!("overlay_gb={}\n", s.overlay_gb.as_deref().unwrap_or_default()));
-    text.push_str(&format!("overlay_gbc={}\n", s.overlay_gbc.as_deref().unwrap_or_default()));
+    text.push_str(&format!(
+        "overlay_gba={}\n",
+        s.overlay_gba.as_deref().unwrap_or_default()
+    ));
+    text.push_str(&format!(
+        "overlay_gb={}\n",
+        s.overlay_gb.as_deref().unwrap_or_default()
+    ));
+    text.push_str(&format!(
+        "overlay_gbc={}\n",
+        s.overlay_gbc.as_deref().unwrap_or_default()
+    ));
     #[cfg(feature = "nds")]
-    text.push_str(&format!("overlay_nds={}\n", s.overlay_nds.as_deref().unwrap_or_default()));
+    text.push_str(&format!(
+        "overlay_nds={}\n",
+        s.overlay_nds.as_deref().unwrap_or_default()
+    ));
     text.push_str(&format!("scale_gba={}\n", s.scale_gba.name()));
     text.push_str(&format!("scale_gb={}\n", s.scale_gb.name()));
     text.push_str(&format!("scale_gbc={}\n", s.scale_gbc.name()));
@@ -838,6 +863,15 @@ pub fn write_slot_state(root: &Path, s: &SlotState) -> std::io::Result<()> {
     atomic_write(&state_path(root), text.as_bytes())?;
     write_list(root, RECENTS_FILE, &s.recents)?;
     write_list(root, FAVORITES_FILE, &s.favorites)
+}
+
+fn auto_load_value(value: &str) -> Option<(bool, bool)> {
+    match value {
+        "1" => Some((true, true)),
+        "power" => Some((false, true)),
+        "0" => Some((false, false)),
+        _ => None,
+    }
 }
 
 fn parse(text: &str) -> Option<SlotState> {
@@ -870,8 +904,9 @@ fn parse(text: &str) -> Option<SlotState> {
     let mut shader_pico8 = None;
     let mut scale_pico8 = None;
     let mut auto_load = None;
-    let mut eject_save = None;
-    let mut turbo = None;
+    let mut resume_insert = None;
+    let mut resume_power_on = None;
+    let mut wallpapers_given = None;
     let mut rewind = None;
     let mut gb_palettes = None;
     let mut gb_palette = None;
@@ -880,7 +915,9 @@ fn parse(text: &str) -> Option<SlotState> {
     let mut wallpaper_tint = None;
     let mut show_recents = None;
     let mut show_titles = None;
+    let mut battery_display = None;
     let mut wifi_off = None;
+    let mut nickname = None;
     let mut gb_core = None;
     let mut left_stick_dpad = None;
     let mut lid_off_min = None;
@@ -936,9 +973,10 @@ fn parse(text: &str) -> Option<SlotState> {
             "colour_correction_gb" => colour_correction_gb = flag(value),
             "colour_correction_gbc" => colour_correction_gbc = flag(value),
             "shader_gba" => shader_gba = Shader::parse(value).filter(|s| Shader::GBA.contains(s)),
-            "auto_load" => auto_load = AutoLoad::parse(value),
-            "eject_save" => eject_save = flag(value),
-            "turbo" => turbo = flag(value),
+            "auto_load" => auto_load = auto_load_value(value),
+            "resume_insert" => resume_insert = flag(value),
+            "resume_power_on" => resume_power_on = flag(value),
+            "wallpapers_given" => wallpapers_given = flag(value),
             "rewind" => rewind = flag(value),
             "gb_palettes" => gb_palettes = flag(value),
             "gb_palette" => gb_palette = GbPalette::parse(value),
@@ -947,7 +985,9 @@ fn parse(text: &str) -> Option<SlotState> {
             "wallpaper_tint" => wallpaper_tint = WallpaperTint::parse(value),
             "show_recents" => show_recents = flag(value),
             "show_titles" => show_titles = flag(value),
+            "battery_display" => battery_display = BatteryDisplay::parse(value),
             "wifi_off" => wifi_off = flag(value),
+            "nickname" => nickname = Some(value.to_string()),
             "gb_core" => gb_core = Core::parse(value).filter(|c| c.runs(Platform::Gb)),
             "left_stick_dpad" => left_stick_dpad = flag(value),
             "lid_off_min" => lid_off_min = value.parse().ok().filter(|m| LID_OFF_MIN.contains(m)),
@@ -1021,18 +1061,24 @@ fn parse(text: &str) -> Option<SlotState> {
         shader_gbc: shader_gbc.or(shader_gb).unwrap_or(fallback.shader_gbc),
         shader_pico8: shader_pico8.unwrap_or(fallback.shader_pico8),
         scale_pico8: scale_pico8.unwrap_or(fallback.scale_pico8),
-        auto_load: auto_load.unwrap_or(fallback.auto_load),
-        eject_save: eject_save.unwrap_or(fallback.eject_save),
-        turbo: turbo.unwrap_or(fallback.turbo),
+        resume_insert: resume_insert
+            .or(auto_load.map(|(insert, _)| insert))
+            .unwrap_or(fallback.resume_insert),
+        resume_power_on: resume_power_on
+            .or(auto_load.map(|(_, power_on)| power_on))
+            .unwrap_or(fallback.resume_power_on),
         rewind: rewind.unwrap_or(fallback.rewind),
         gb_palettes: gb_palettes.unwrap_or(fallback.gb_palettes),
         gb_palette: gb_palette.unwrap_or(fallback.gb_palette),
         appearance: appearance.unwrap_or(fallback.appearance),
         wallpaper: wallpaper.unwrap_or(fallback.wallpaper),
         wallpaper_tint: wallpaper_tint.unwrap_or(fallback.wallpaper_tint),
+        wallpapers_given: wallpapers_given.unwrap_or(fallback.wallpapers_given),
         show_recents: show_recents.unwrap_or(fallback.show_recents),
         show_titles: show_titles.unwrap_or(fallback.show_titles),
+        battery_display: battery_display.unwrap_or(fallback.battery_display),
         wifi_off: wifi_off.unwrap_or(fallback.wifi_off),
+        nickname: nickname.unwrap_or_default(),
         gb_core: gb_core.unwrap_or(Core::Mgba),
         left_stick_dpad: left_stick_dpad.unwrap_or(fallback.left_stick_dpad),
         lid_off_min,
