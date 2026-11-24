@@ -1,33 +1,85 @@
 name: release
 
+# Releases this fork. Start it from the Actions tab (phone works too) with a version
+# number: slot's own version plus a fourth number for this fork, as in 1.16.0.1, then
+# 1.16.0.2, and 1.16.1.1 once slot 1.16.1 is merged in. A device running an earlier
+# release of this fork offers the new one under System -> Check for Updates.
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, as in 1.16.0.1 (no leading v)
+        required: true
+        type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  checked:
-    name: tag made by task tag
+  version:
+    name: version is new
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+    steps:
+      - name: Refuse a version a device would not take as newer
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -eu
+          if ! printf '%s' "$VERSION" | grep -Eqx '[0-9]+(\.[0-9]+){2,3}'; then
+            echo "::error::$VERSION is not numbers with dots, as in 1.16.0.1: a device would never offer it"
+            exit 1
+          fi
+          tag="v$VERSION"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::$tag is already released"
+            exit 1
+          fi
+          last=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName 2>/dev/null || true)
+          if [ -n "$last" ]; then
+            top=$(printf '%s\n%s\n' "${last#v}" "$VERSION" | sort -V | tail -n1)
+            if [ "$top" != "$VERSION" ] || [ "${last#v}" = "$VERSION" ]; then
+              echo "::error::$VERSION is not newer than the latest release $last, so no device would offer it"
+              exit 1
+            fi
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  checks:
+    name: lint and tests
+    needs: version
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
 
-      - name: Refuse a tag whose commit did not pass task tag
-        if: github.ref_type == 'tag'
+      - name: Install Task and cargo-nextest
         run: |
           set -eu
-          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
-          if ! git cat-file tag "refs/tags/${GITHUB_REF_NAME}" | grep -qx "Checked: ${GITHUB_SHA}"; then
-            echo "::error::${GITHUB_REF_NAME} was not made by task tag, so its checks never ran on ${GITHUB_SHA}"
-            exit 1
-          fi
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL https://taskfile.dev/install.sh | sh -s -- -b "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          curl -LsSf https://get.nexte.st/latest/mac | tar zxf - -C "$HOME/.local/bin"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: task lint
+      - run: task lint:device
+      - run: task test
+      - run: task test:card
 
   build:
     name: card tree
-    needs: checked
+    needs: [version, checks]
+    env:
+      TAG: ${{ needs.version.outputs.tag }}
+      SLOT_VERSION: ${{ inputs.version }}
     runs-on: ubuntu-24.04-arm
     container: rust:1-bullseye
     outputs:
@@ -45,12 +97,12 @@ jobs:
           curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash -s "bun-v1.2.6"
 
       - name: Build the tree
-        run: task dist:device OUT="slot-${GITHUB_REF_NAME}"
+        run: task dist:device OUT="slot-${TAG}"
 
       - name: Check what is about to ship
         run: |
           set -eu
-          out="slot-${GITHUB_REF_NAME}"
+          out="slot-${TAG}"
           file "$out/System/slot" | grep -q aarch64
           file "$out/System/mgba_libretro.so" | grep -q aarch64
           file "$out/System/gpsp_libretro.so" | grep -q aarch64
@@ -81,7 +133,7 @@ jobs:
         id: package
         run: |
           set -eu
-          out="slot-${GITHUB_REF_NAME}"
+          out="slot-${TAG}"
           zip="$out-h700.zip"
           zip -qry "$zip" "$out"
           echo "zip=$zip" >> "$GITHUB_OUTPUT"
@@ -94,38 +146,44 @@ jobs:
 
   publish:
     name: release
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      actions: write
+    env:
+      TAG: ${{ needs.version.outputs.tag }}
+      ZIP: ${{ needs.build.outputs.zip }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: CHANGELOG.md
+          sparse-checkout: |
+            CHANGELOG.md
+            .github/scripts/versions.sh
           sparse-checkout-cone-mode: false
 
       - uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build.outputs.zip }}
 
-      - name: Create the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ZIP: ${{ needs.build.outputs.zip }}
+      - name: Write the notes and versions.json
         run: |
           set -eu
-          awk -v head="## [${GITHUB_REF_NAME#v}]" '
-            index($0, head) == 1 { found = 1; next }
-            found && /^## / { exit }
-            found { print }
-          ' CHANGELOG.md | sed -e '/./,$!d' > notes.md
-          test -s notes.md
-          gh release create "$GITHUB_REF_NAME" "$ZIP" --repo "$GITHUB_REPOSITORY" \
-            --title "$GITHUB_REF_NAME" --notes-file notes.md
+          for head in "## [${TAG#v}]" "## Unreleased"; do
+            awk -v head="$head" '
+              index($0, head) == 1 { found = 1; next }
+              found && /^## / { exit }
+              found { print }
+            ' CHANGELOG.md | sed -e '/./,$!d' > notes.md
+            [ -s notes.md ] && break
+          done
+          [ -s notes.md ] || echo "slot with PICO-8, ${TAG}." > notes.md
+          OUT=versions.json SLOT_TAG="$TAG" SLOT_ZIP="$ZIP" bash .github/scripts/versions.sh
 
-      - name: Publish versions.json with the site
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main
+      # A draft first, so no device sees versions.json before its zip is there.
+      - name: Create the release
+        run: |
+          set -eu
+          gh release create "$TAG" "$ZIP" versions.json --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "$TAG" --notes-file notes.md --draft
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest

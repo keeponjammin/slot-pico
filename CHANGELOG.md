@@ -3,6 +3,8 @@
 ## Unreleased
 
 - PICO-8 has its own shelf. Put your `.p8` and `.p8.png` carts in `Games/PICO8/` and they play on fake-08, which comes with slot, with save states and the in-game menu like any other game. If you own PICO-8, put Lexaloffle's Raspberry Pi zip in `BIOS/PICO-8/`: press START on a cart to play it on your own copy instead, and a Splore cart opens PICO-8's BBS browser over your saved Wi-Fi. Both keep game saves in `Saves/PICO8/cdata/`. PICO-8 is its own system, with its own Shader and Scale under Settings → Screen → PICO-8. slot steps aside while PICO-8 runs: <kbd>MENU</kbd> pauses it under slot's in-game menu, holding <kbd>MENU</kbd> quits back to the same cart, and <kbd>POWER</kbd> or closing the lid turns the screen off. Its carts are its own too, made like the printed carts PICO-8 fans make: a square label window, the cart's name in PICO-8's letters on a strip under it, and, opened to switch cores, a purple board of its own with fake-08 and PICO-8 chips. Labels come from the carts themselves. Splore reaches the BBS: slot does PICO-8's downloads for it. Carts you favourite in Splore land on the PICO-8 shelf when you leave PICO-8. Without PICO-8 on the card, Splore stays off the shelf and the board only offers fake-08.
+- Check for Updates now looks at this fork's releases instead of slot's, so a device on this fork stays on it. Releases count on from the slot version they carry: 1.16.0.1, 1.16.0.2, then 1.16.1.1 once slot 1.16.1 is in. BaseOS updates are offered as before.
+
 ## [1.16.0](https://github.com/slot-cfw/slot/releases/tag/v1.16.0)
 
 - Carts with no label art now get their title handwritten on the plastic in black or white marker.

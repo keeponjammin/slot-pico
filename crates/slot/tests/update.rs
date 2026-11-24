@@ -166,7 +166,7 @@ fn parse_release_reads_the_version_url_and_digest() {
     assert_eq!(r.version, "1.11.0");
     assert_eq!(
         r.url,
-        "https://github.com/slot-cfw/slot/releases/download/v1.11.0/slot-v1.11.0-h700.zip"
+        "https://github.com/keeponjammin/slot-pico/releases/download/v1.11.0/slot-v1.11.0-h700.zip"
     );
     assert_eq!(r.size, 6919551);
     assert_eq!(&r.sha256[..2], &[0xe7, 0x8b]);
@@ -199,6 +199,15 @@ fn newer_compares_numerically() {
     assert!(!newer("1.11.0", "1.11.0"));
     assert!(!newer("1.11.0", "1.12.0"));
     assert!(!newer("1.12.0-rc1", "1.11.0"));
+}
+
+#[test]
+fn a_fork_release_counts_on_from_the_slot_release_it_carries() {
+    assert!(newer("1.16.0.1", "1.16.0"));
+    assert!(newer("1.16.0.2", "1.16.0.1"));
+    assert!(newer("1.16.1", "1.16.0.3"));
+    assert!(newer("1.16.1.1", "1.16.1"));
+    assert!(!newer("1.16.0", "1.16.0.1"));
 }
 
 #[test]
@@ -717,7 +726,7 @@ fn parse_release_gives_the_ds_plus_its_own_zip() {
     assert_eq!(r.version, "1.11.0");
     assert_eq!(
         r.url,
-        "https://github.com/slot-cfw/slot/releases/download/v1.11.0/slot-v1.11.0-rgdsplus.zip"
+        "https://github.com/keeponjammin/slot-pico/releases/download/v1.11.0/slot-v1.11.0-rgdsplus.zip"
     );
     assert_eq!(r.size, 8000000);
     assert_eq!(&r.sha256[..2], &[0xaa, 0x8b]);

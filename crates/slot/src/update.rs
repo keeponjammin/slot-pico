@@ -303,8 +303,11 @@ impl<R: Read> Read for Stoppable<R> {
 }
 
 pub const WIFI_CONF: &str = "Config/wifi.conf";
-pub const LATEST: &str = "https://slot-cfw.fyi/versions.json";
-const RELEASES: &str = "https://github.com/slot-cfw/slot/releases/download";
+/// This fork updates from its own releases, not slot's: each release carries the
+/// `versions.json` that names its zip, and GitHub sends `latest` to the newest one.
+pub const LATEST: &str =
+    "https://github.com/keeponjammin/slot-pico/releases/latest/download/versions.json";
+const RELEASES: &str = "https://github.com/keeponjammin/slot-pico/releases/download";
 const BASEOS_RELEASES: &str = "https://github.com/pvaibhav/BaseOS/releases/download";
 
 #[derive(Debug, Clone, Copy)]

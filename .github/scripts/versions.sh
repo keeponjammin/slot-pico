@@ -4,10 +4,18 @@ set -eu
 BASEOS_REPO="${BASEOS_REPO:-pvaibhav/BaseOS}"
 LIVE="${LIVE:-https://slot-cfw.fyi/versions.json}"
 
+if [ -n "${SLOT_ZIP:-}" ]; then
+  # A release still being made: describe its zip from the file itself.
+  slot=$(jq -n --arg t "$SLOT_TAG" --arg zip "$(basename "$SLOT_ZIP")" \
+    --argjson size "$(wc -c < "$SLOT_ZIP")" \
+    --arg sha "$(sha256sum "$SLOT_ZIP" | cut -d' ' -f1)" \
+    '{version: ($t | ltrimstr("v")), tag: $t, zip: $zip, size: $size, sha256: $sha}')
+else
 slot=$(gh release view --repo "$SLOT_REPO" --json tagName,assets | jq '
   .tagName as $t | ($t | ltrimstr("v")) as $v
   | first(.assets[] | select(.name == "slot-\($t)-h700.zip"))
   | {version: $v, tag: $t, zip: .name, size: .size, sha256: (.digest | ltrimstr("sha256:"))}')
+fi
 echo "$slot" | jq -e '.sha256 | test("^[0-9a-f]{64}$")' > /dev/null
 
 baseos_release() {
