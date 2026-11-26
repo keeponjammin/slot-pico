@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [1.16.0.3]
+
 - PICO-8's CRT shader now shows on fake-08 too, so every PICO-8 cart gets the same scanlines, glow and colours whichever core plays it.
 
 ## [1.16.0.2]
