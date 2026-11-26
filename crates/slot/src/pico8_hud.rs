@@ -204,7 +204,7 @@ pub fn premultiplied(over_black: &[u8], over_white: &[u8]) -> Vec<u8> {
 }
 
 /// The file the shim reads, laid out as cores/pico8-sdl/sdl_init.c's
-/// `struct hud`: eight little-endian words, then the strip.
+/// `struct hud`: ten little-endian words, then the strip.
 pub mod layout {
     pub const MAGIC: u32 = 0x4448_4c53;
     pub const HEADER: usize = 64;
@@ -223,6 +223,10 @@ pub mod layout {
     /// `screen_gain`'s red, green and blue, times `GAIN_ONE`.
     pub const W_GAIN: usize = 6;
     pub const GAIN_ONE: u32 = 65535;
+    /// The look PICO-8's screen gets: `SHADER_OFF` or `SHADER_CRT`.
+    pub const W_SHADER: usize = 9;
+    pub const SHADER_OFF: u32 = 0;
+    pub const SHADER_CRT: u32 = 1;
 }
 
 #[cfg(unix)]
@@ -292,6 +296,12 @@ mod shared {
                 let fixed = (g.clamp(0.0, 1.0) * GAIN_ONE as f32).round() as u32;
                 self.word(W_GAIN + i).store(fixed, Ordering::Release);
             }
+        }
+
+        /// Whether the shim draws PICO-8's screen with slot's CRT look.
+        pub fn set_crt(&self, on: bool) {
+            let shader = if on { SHADER_CRT } else { SHADER_OFF };
+            self.word(W_SHADER).store(shader, Ordering::Release);
         }
 
         /// Puts `rgba`, premultiplied and `w` by `h`, on screen.

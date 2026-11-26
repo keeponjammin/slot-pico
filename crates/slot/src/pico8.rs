@@ -1317,6 +1317,7 @@ mod runner {
             Some(s) => {
                 s.set_volume(crate::pico8_hud::output_volume(&state, headphones));
                 s.set_gain(crate::pico8_hud::screen_gain(&state));
+                s.set_crt(state.shader_pico8 == slot_store::Shader::Crt);
                 256
             }
             None => volume(&state, headphones),

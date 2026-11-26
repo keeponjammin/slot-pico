@@ -20,6 +20,9 @@
  *   slot's own audio does (crates/slot/src/audio/volume.rs).
  * - SDL_RenderCopy: what PICO-8 draws is tinted by slot's blue light and
  *   dim gain, as slot's compositor tints every frame of its own games.
+ *   With slot's CRT shader chosen for PICO-8, the shim draws PICO-8's
+ *   128x128 screen itself instead: scanlines, a glow around bright
+ *   pixels and livelier colours (see "the CRT look" below).
  * - SDL_RenderPresent: while slot shows its HUD, the strip it drew is laid
  *   over the top of each frame. PICO-8 only redraws pixels that change, so
  *   whatever is drawn over it stays until PICO-8 draws there again. The
@@ -77,7 +80,11 @@ struct hud {
 	volatile uint32_t shown;  /* 1 while the strip should be on screen */
 	volatile uint32_t w, h;   /* the strip, premultiplied RGBA, top down */
 	volatile uint32_t gain[3]; /* slot's screen tint, 65535 is 1 */
+	volatile uint32_t shader; /* SHADER_*, the look PICO-8's screen gets */
 };
+
+#define SHADER_OFF 0u
+#define SHADER_CRT 1u
 
 #define GAIN_ONE 65535u
 
@@ -248,6 +255,11 @@ typedef char GLchar;
 #define GL_VERTEX_ATTRIB_ARRAY_POINTER 0x8645
 #define GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING 0x889F
 
+#define GL_TEXTURE1 0x84C1
+#define GL_LINEAR 0x2601
+#define GL_COLOR_ATTACHMENT0 0x8CE0
+#define GL_FRAMEBUFFER_COMPLETE 0x8CD5
+
 #define EGL_DRAW 0x3059
 #define EGL_SWAP_BEHAVIOR 0x3093
 #define EGL_BUFFER_PRESERVED 0x3094
@@ -260,6 +272,7 @@ static struct {
 	void (*BindBuffer)(GLenum, GLuint);
 	void (*BindFramebuffer)(GLenum, GLuint);
 	void (*BindTexture)(GLenum, GLuint);
+	GLenum (*CheckFramebufferStatus)(GLenum);
 	void (*ColorMask)(GLboolean, GLboolean, GLboolean, GLboolean);
 	void (*CompileShader)(GLuint);
 	GLuint (*CreateProgram)(void);
@@ -269,6 +282,8 @@ static struct {
 	void (*DrawArrays)(GLenum, GLint, GLsizei);
 	void (*Enable)(GLenum);
 	void (*EnableVertexAttribArray)(GLuint);
+	void (*FramebufferTexture2D)(GLenum, GLenum, GLenum, GLuint, GLint);
+	void (*GenFramebuffers)(GLsizei, GLuint *);
 	void (*GenTextures)(GLsizei, GLuint *);
 	void (*GetBooleanv)(GLenum, GLboolean *);
 	void (*GetIntegerv)(GLenum, GLint *);
@@ -284,7 +299,10 @@ static struct {
 	void (*ShaderSource)(GLuint, GLsizei, const GLchar *const *, const GLint *);
 	void (*TexImage2D)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void *);
 	void (*TexParameteri)(GLenum, GLenum, GLint);
+	void (*Uniform1f)(GLint, GLfloat);
 	void (*Uniform1i)(GLint, GLint);
+	void (*Uniform2f)(GLint, GLfloat, GLfloat);
+	void (*Uniform3f)(GLint, GLfloat, GLfloat, GLfloat);
 	void (*UseProgram)(GLuint);
 	void (*VertexAttribPointer)(GLuint, GLint, GLenum, GLboolean, GLsizei, const void *);
 	void (*Viewport)(GLint, GLint, GLsizei, GLsizei);
@@ -292,6 +310,9 @@ static struct {
 
 static int load_gl(void)
 {
+	static int loaded;
+	if (loaded)
+		return 1;
 	void *(*proc)(const char *) = (void *(*)(const char *))dlsym(RTLD_NEXT, "SDL_GL_GetProcAddress");
 	if (!proc)
 		return 0;
@@ -302,15 +323,17 @@ static int load_gl(void)
 			return 0;                    \
 	} while (0)
 	GL(ActiveTexture); GL(AttachShader); GL(BindAttribLocation); GL(BindBuffer);
-	GL(BindFramebuffer); GL(BindTexture); GL(ColorMask); GL(CompileShader);
-	GL(CreateProgram); GL(CreateShader); GL(Disable); GL(DisableVertexAttribArray);
-	GL(DrawArrays); GL(Enable); GL(EnableVertexAttribArray); GL(GenTextures);
+	GL(BindFramebuffer); GL(BindTexture); GL(CheckFramebufferStatus); GL(ColorMask);
+	GL(CompileShader); GL(CreateProgram); GL(CreateShader); GL(Disable);
+	GL(DisableVertexAttribArray); GL(DrawArrays); GL(Enable); GL(EnableVertexAttribArray);
+	GL(FramebufferTexture2D); GL(GenFramebuffers); GL(GenTextures);
 	GL(GetBooleanv); GL(GetIntegerv); GL(GetProgramiv); GL(GetShaderiv);
 	GL(GetVertexAttribiv); GL(GetVertexAttribPointerv); GL(GetUniformLocation);
 	GL(IsEnabled); GL(LinkProgram); GL(PixelStorei); GL(ReadPixels); GL(ShaderSource);
-	GL(TexImage2D); GL(TexParameteri); GL(Uniform1i); GL(UseProgram);
-	GL(VertexAttribPointer); GL(Viewport);
+	GL(TexImage2D); GL(TexParameteri); GL(Uniform1f); GL(Uniform1i); GL(Uniform2f);
+	GL(Uniform3f); GL(UseProgram); GL(VertexAttribPointer); GL(Viewport);
 #undef GL
+	loaded = 1;
 	return 1;
 }
 
@@ -654,10 +677,470 @@ static void overlay(void *renderer)
 	restore_gl(&s);
 }
 
+/* ---- the CRT look -------------------------------------------------------- *
+ *
+ * PICO-8 keeps its 128x128 screen in one SDL texture and copies it to the
+ * window. With the CRT shader on, the shim draws that texture itself:
+ *
+ * 1. the bright part of the screen, blurred across and then down, into a
+ *    128x128 texture of its own (two small passes, cheap on the Mali);
+ * 2. the screen, pixel for pixel as PICO-8 drew it, with livelier colours,
+ *    one soft dark scanline at the foot of every PICO-8 row, the blur laid
+ *    over it as glow (near and wide), and a faint vignette, tinted by slot's
+ *    blue light and dim gain.
+ *
+ * Everything is drawn where SDL would have drawn the copy, so the HUD and
+ * the rest of the shim see the same frames they always did. */
+
+#define CRT_SIZE 128
+
+/* SDL_PIXELFORMAT_*, as SDL_QueryTexture reports them. */
+#define SDL_ARGB8888 0x16362004u
+#define SDL_XRGB8888 0x16161804u
+
+typedef struct {
+	int x, y, w, h;
+} Rect;
+
+static struct {
+	int ready, failed;
+	GLuint blur, final;           /* programs */
+	GLint blur_tex, blur_step, blur_bright, blur_swap;
+	GLint final_tex, final_glow, final_swap, final_foot, final_gain;
+	GLuint fbo[2], tex[2];       /* across, then down */
+	void *screen;                /* the SDL texture PICO-8 copies */
+	GLuint screen_gl;            /* its GL name */
+	int swap;                    /* -1 until known: 1 if red and blue are swapped in GL */
+	unsigned copies;             /* copies drawn, to pace the read-backs */
+	unsigned looked;             /* times read back to learn `swap` */
+	uint32_t *probe;
+	unsigned long uploads;       /* times PICO-8 changed `screen`'s pixels */
+	int upload_seen;             /* 1 once an upload to `screen` was seen */
+	unsigned long blurred_at;    /* `uploads` when tex[1] was last blurred */
+	int blurred;                 /* 1 while tex[1] holds a blur of `screen` */
+} crt = { .swap = -1 };
+
+/* Read the screen back to learn `swap` at most this often, this many times:
+ * each read makes the CPU wait for the GPU. */
+#define SWAP_EVERY 30u
+#define SWAP_TRIES 40u
+
+/* PICO-8 changed the pixels of `texture`. */
+static void crt_uploaded(void *texture)
+{
+	if (texture && texture == crt.screen) {
+		crt.uploads++;
+		crt.upload_seen = 1;
+	}
+}
+
+static const char *crt_vs =
+	"attribute vec2 pos;\n"
+	"attribute vec2 uv;\n"
+	"varying vec2 v;\n"
+	"void main() { v = uv; gl_Position = vec4(pos, 0.0, 1.0); }\n";
+
+/* One direction of a 9-tap Gaussian (sigma 1.6 PICO-8 pixels). In the first
+ * pass `bright` keeps only what glows: nothing of dark colours, all of the
+ * brightest. */
+static const char *crt_blur_fs =
+	"precision mediump float;\n"
+	"uniform sampler2D tex;\n"
+	"uniform vec2 step;\n"
+	"uniform float bright;\n"
+	"uniform float swap;\n"
+	"varying vec2 v;\n"
+	"vec3 at(float k) {\n"
+	"    vec3 c = texture2D(tex, v + step * k).rgb;\n"
+	"    c = mix(c, c.bgr, swap);\n"
+	"    float m = max(c.r, max(c.g, c.b));\n"
+	"    return c * mix(1.0, smoothstep(0.35, 1.0, m), bright);\n"
+	"}\n"
+	"void main() {\n"
+	"    vec3 s = at(0.0) * 0.2466;\n"
+	"    s += (at(-1.0) + at(1.0)) * 0.2006;\n"
+	"    s += (at(-2.0) + at(2.0)) * 0.1081;\n"
+	"    s += (at(-3.0) + at(3.0)) * 0.0386;\n"
+	"    s += (at(-4.0) + at(4.0)) * 0.0091;\n"
+	"    gl_FragColor = vec4(s, 1.0);\n"
+	"}\n";
+
+/* `foot` is how many PICO-8 rows one window pixel spans. */
+static const char *crt_final_fs =
+	"#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
+	"precision highp float;\n"
+	"#else\n"
+	"precision mediump float;\n"
+	"#endif\n"
+	"uniform sampler2D tex;\n"
+	"uniform sampler2D glow;\n"
+	"uniform float swap;\n"
+	"uniform float foot;\n"
+	"uniform vec3 gain;\n"
+	"varying vec2 v;\n"
+	"const float SIZE = 128.0;\n"
+	"const float GAMMA = 0.85;\n"
+	"const float SATURATION = 1.25;\n"
+	"const float BRIGHT = 1.04;\n"
+	"const float SCAN_DEPTH = 0.22;\n"
+	"const float SCAN_WIDTH = 0.13;\n"
+	"const float GLOW = 0.18;\n"
+	"const float GLOW_WIDE = 0.10;\n"
+	"const float VIGNETTE = 0.07;\n"
+	/* The dark line sits at the foot of each row, centred on the last
+	 * window row of it when PICO-8 is scaled by a whole number. */
+	"float scan(float y) {\n"
+	"    float centre = 1.0 - 0.5 * min(foot, 0.34);\n"
+	"    float d = abs(fract(y) - centre);\n"
+	"    d = min(d, 1.0 - d);\n"
+	"    return 1.0 - SCAN_DEPTH * exp(-(d * d) / (SCAN_WIDTH * SCAN_WIDTH));\n"
+	"}\n"
+	"void main() {\n"
+	"    vec2 p = v * SIZE;\n"
+	"    mediump vec3 c = texture2D(tex, (floor(p) + 0.5) / SIZE).rgb;\n"
+	"    c = mix(c, c.bgr, swap);\n"
+	"    c = pow(c, vec3(GAMMA));\n"
+	"    mediump float l = dot(c, vec3(0.299, 0.587, 0.114));\n"
+	"    c = clamp(mix(vec3(l), c, SATURATION) * BRIGHT, 0.0, 1.0);\n"
+	"    float q = foot * 0.25;\n"
+	"    mediump float s = 0.25 * (scan(p.y - 1.5 * q) + scan(p.y - 0.5 * q)\n"
+	"                    + scan(p.y + 0.5 * q) + scan(p.y + 1.5 * q));\n"
+	"    mediump vec3 near = texture2D(glow, v).rgb;\n"
+	"    vec2 o = vec2(5.0 / SIZE);\n"
+	"    mediump vec3 wide = 0.25 * (texture2D(glow, v + o).rgb + texture2D(glow, v - o).rgb\n"
+	"                      + texture2D(glow, v + vec2(o.x, -o.y)).rgb\n"
+	"                      + texture2D(glow, v + vec2(-o.x, o.y)).rgb);\n"
+	"    c = c * s + near * GLOW + wide * GLOW_WIDE;\n"
+	"    vec2 e = v * 2.0 - 1.0;\n"
+	"    c *= 1.0 - VIGNETTE * dot(e, e);\n"
+	"    gl_FragColor = vec4(clamp(c, 0.0, 1.0) * gain, 1.0);\n"
+	"}\n";
+
+static GLuint program(const char *vs, const char *fs)
+{
+	GLuint v = shader(GL_VERTEX_SHADER, vs), f = shader(GL_FRAGMENT_SHADER, fs);
+	if (!v || !f)
+		return 0;
+	GLuint p = gl.CreateProgram();
+	gl.AttachShader(p, v);
+	gl.AttachShader(p, f);
+	gl.BindAttribLocation(p, 0, "pos");
+	gl.BindAttribLocation(p, 1, "uv");
+	gl.LinkProgram(p);
+	GLint ok = 0;
+	gl.GetProgramiv(p, GL_LINK_STATUS, &ok);
+	return ok ? p : 0;
+}
+
+static int crt_set_up(void)
+{
+	if (!load_gl())
+		return 0;
+	crt.blur = program(crt_vs, crt_blur_fs);
+	crt.final = program(crt_vs, crt_final_fs);
+	if (!crt.blur || !crt.final)
+		return 0;
+	crt.blur_tex = gl.GetUniformLocation(crt.blur, "tex");
+	crt.blur_step = gl.GetUniformLocation(crt.blur, "step");
+	crt.blur_bright = gl.GetUniformLocation(crt.blur, "bright");
+	crt.blur_swap = gl.GetUniformLocation(crt.blur, "swap");
+	crt.final_tex = gl.GetUniformLocation(crt.final, "tex");
+	crt.final_glow = gl.GetUniformLocation(crt.final, "glow");
+	crt.final_swap = gl.GetUniformLocation(crt.final, "swap");
+	crt.final_foot = gl.GetUniformLocation(crt.final, "foot");
+	crt.final_gain = gl.GetUniformLocation(crt.final, "gain");
+	gl.GenTextures(2, crt.tex);
+	gl.GenFramebuffers(2, crt.fbo);
+	for (int i = 0; i < 2; i++) {
+		gl.BindTexture(GL_TEXTURE_2D, crt.tex[i]);
+		gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, CRT_SIZE, CRT_SIZE, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+		gl.BindFramebuffer(GL_FRAMEBUFFER, crt.fbo[i]);
+		gl.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, crt.tex[i], 0);
+		if (gl.CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+			return 0;
+	}
+	crt.probe = calloc(CRT_SIZE * CRT_SIZE, 4);
+	return crt.probe != NULL;
+}
+
+/* PICO-8's 32 colours, as 0xRRGGBB. */
+static const uint32_t pico8_colours[32] = {
+	0x000000, 0x1d2b53, 0x7e2553, 0x008751, 0xab5236, 0x5f574f, 0xc2c3c7, 0xfff1e8,
+	0xff004d, 0xffa300, 0xffec27, 0x00e436, 0x29adff, 0x83769c, 0xff77a8, 0xffccaa,
+	0x291814, 0x111d35, 0x422136, 0x125359, 0x742f29, 0x49333b, 0xa28879, 0xf3ef7d,
+	0xbe1250, 0xff6c24, 0xa8e72e, 0x00b543, 0x065ab5, 0x754665, 0xff6e59, 0xff9d81,
+};
+
+static int is_pico8_colour(uint32_t rgb)
+{
+	for (int i = 1; i < 32; i++)
+		if (pico8_colours[i] == rgb)
+			return 1;
+	return 0;
+}
+
+/* SDL may keep the texture with red and blue swapped in GL and swap them
+ * back as it draws. Read the screen back and see which way round PICO-8's
+ * own colours come out. Runs with crt.fbo[0] bound. */
+static void learn_swap(void)
+{
+	gl.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, crt.screen_gl, 0);
+	if (gl.CheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+		gl.PixelStorei(GL_PACK_ALIGNMENT, 4);
+		gl.ReadPixels(0, 0, CRT_SIZE, CRT_SIZE, GL_RGBA, GL_UNSIGNED_BYTE, crt.probe);
+		int straight = 0, swapped = 0;
+		for (int i = 0; i < CRT_SIZE * CRT_SIZE; i++) {
+			const uint8_t *b = (const uint8_t *)&crt.probe[i];
+			uint32_t rgb = (uint32_t)b[0] << 16 | (uint32_t)b[1] << 8 | b[2];
+			uint32_t bgr = (uint32_t)b[2] << 16 | (uint32_t)b[1] << 8 | b[0];
+			straight += is_pico8_colour(rgb);
+			swapped += is_pico8_colour(bgr);
+		}
+		if (straight + swapped > 256 && straight != swapped) {
+			crt.swap = swapped > straight;
+			fprintf(stderr, "slot: pico8: crt: colours %s (%d against %d)\n",
+				crt.swap ? "swapped" : "straight", straight, swapped);
+		}
+	}
+	gl.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, crt.tex[0], 0);
+}
+
+static void quad(GLfloat x0, GLfloat y0, GLfloat x1, GLfloat y1)
+{
+	/* pos x, y then uv s, t; t is 0 at the top row of PICO-8's screen. */
+	GLfloat v[16] = {
+		x0, y1, 0.0f, 0.0f,
+		x1, y1, 1.0f, 0.0f,
+		x0, y0, 0.0f, 1.0f,
+		x1, y0, 1.0f, 1.0f,
+	};
+	gl.BindBuffer(GL_ARRAY_BUFFER, 0);
+	gl.VertexAttribPointer(0, 2, GL_FLOAT, 0, 4 * sizeof(GLfloat), v);
+	gl.VertexAttribPointer(1, 2, GL_FLOAT, 0, 4 * sizeof(GLfloat), v + 2);
+	gl.EnableVertexAttribArray(0);
+	gl.EnableVertexAttribArray(1);
+	gl.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+}
+
+/* Draws `texture` (PICO-8's screen) the way SDL_RenderCopy would place it,
+ * with the CRT look. Returns 0 when it did not, so SDL draws it instead. */
+static int crt_copy(void *renderer, void *texture, const Rect *src, const Rect *dst)
+{
+	static int (*query)(void *, uint32_t *, int *, int *, int *);
+	static int (*bind)(void *, float *, float *);
+	static int (*unbind)(void *);
+	static void (*viewport)(void *, Rect *);
+	static void (*scale)(void *, float *, float *);
+	static int (*output_size)(void *, int *, int *);
+	static void *(*target)(void *);
+	static int (*flush)(void *);
+	static int logged;
+	if (crt.failed)
+		return 0;
+	if (!query) {
+		*(void **)&query = dlsym(RTLD_NEXT, "SDL_QueryTexture");
+		*(void **)&bind = dlsym(RTLD_NEXT, "SDL_GL_BindTexture");
+		*(void **)&unbind = dlsym(RTLD_NEXT, "SDL_GL_UnbindTexture");
+		*(void **)&viewport = dlsym(RTLD_NEXT, "SDL_RenderGetViewport");
+		*(void **)&scale = dlsym(RTLD_NEXT, "SDL_RenderGetScale");
+		*(void **)&output_size = dlsym(RTLD_NEXT, "SDL_GetRendererOutputSize");
+		*(void **)&target = dlsym(RTLD_NEXT, "SDL_GetRenderTarget");
+		*(void **)&flush = dlsym(RTLD_NEXT, "SDL_RenderFlush");
+		if (!query || !bind || !unbind || !viewport || !scale || !output_size || !target) {
+			crt.failed = 1;
+			fprintf(stderr, "slot: pico8: crt: SDL lacks what it needs, no CRT\n");
+			return 0;
+		}
+	}
+	uint32_t format = 0;
+	int access = 0, tw = 0, th = 0;
+	if (query(texture, &format, &access, &tw, &th) || tw != CRT_SIZE || th != CRT_SIZE)
+		return 0;
+	if (target(renderer))
+		return 0;
+	int win_w = 0, win_h = 0;
+	if (output_size(renderer, &win_w, &win_h) || win_w <= 0 || win_h <= 0)
+		return 0;
+
+	/* Where SDL would put the whole texture, in window pixels. */
+	Rect vp;
+	float sx = 1.0f, sy = 1.0f;
+	viewport(renderer, &vp);
+	scale(renderer, &sx, &sy);
+	Rect s = src ? *src : (Rect){ 0, 0, tw, th };
+	Rect d = dst ? *dst : (Rect){ 0, 0, vp.w, vp.h };
+	if (s.w <= 0 || s.h <= 0 || d.w <= 0 || d.h <= 0)
+		return 0;
+	float kx = (float)d.w / (float)s.w, ky = (float)d.h / (float)s.h;
+	float fx = ((float)vp.x + (float)d.x - (float)s.x * kx) * sx;
+	float fy = ((float)vp.y + (float)d.y - (float)s.y * ky) * sy;
+	float fw = (float)tw * kx * sx, fh = (float)th * ky * sy;
+
+	struct saved_gl saved;
+	if (!crt.ready) {
+		if (!load_gl()) {
+			crt.failed = 1;
+			fprintf(stderr, "slot: pico8: crt: no GL, no CRT\n");
+			return 0;
+		}
+		save_gl(&saved);
+		int ok = crt_set_up();
+		restore_gl(&saved);
+		if (!ok) {
+			crt.failed = 1;
+			fprintf(stderr, "slot: pico8: crt: could not set up GL, no CRT\n");
+			return 0;
+		}
+		crt.ready = 1;
+	}
+	save_gl(&saved);
+	GLint unit1 = 0;
+	gl.ActiveTexture(GL_TEXTURE1);
+	gl.GetIntegerv(GL_TEXTURE_BINDING_2D, &unit1);
+	gl.ActiveTexture(GL_TEXTURE0);
+	if (texture != crt.screen) {
+		/* SDL_GL_BindTexture binds it and tells SDL so; unbinding tells SDL
+		 * nothing is bound, so it binds its own again when it next draws. */
+		GLint name = 0;
+		float bw = 0.0f, bh = 0.0f;
+		bind(texture, &bw, &bh);
+		gl.GetIntegerv(GL_TEXTURE_BINDING_2D, &name);
+		unbind(texture);
+		crt.screen = texture;
+		crt.screen_gl = (GLuint)name;
+		crt.swap = -1;
+		crt.looked = 0;
+		crt.blurred = 0;
+		crt.upload_seen = 0;
+	}
+	if (!logged) {
+		logged = 1;
+		fprintf(stderr, "slot: pico8: crt: format 0x%x, %dx%d to %.1f,%.1f %.1fx%.1f of %dx%d\n",
+			format, tw, th, fx, fy, fw, fh, win_w, win_h);
+	}
+	gl.Disable(GL_BLEND);
+	gl.Disable(GL_SCISSOR_TEST);
+	gl.Disable(GL_DEPTH_TEST);
+	gl.Disable(GL_STENCIL_TEST);
+	gl.Disable(GL_CULL_FACE);
+	gl.ColorMask(1, 1, 1, 1);
+
+	/* Blur the bright part across into tex[0], then down into tex[1]. Each
+	 * pass draws its top row (t = 0) into the texture's last row, so tex[0]
+	 * is upside down and tex[1], flipped twice, the right way up again.
+	 *
+	 * This runs before SDL's queued draws reach the window: the Mali draws a
+	 * frame in tiles, and turning to another framebuffer once the window has
+	 * draws pending would make it write the window out and read it back in.
+	 * A screen PICO-8 has not changed since keeps its blur. */
+	if (crt.swap < 0 && crt.looked < SWAP_TRIES && crt.copies % SWAP_EVERY == 0) {
+		gl.BindFramebuffer(GL_FRAMEBUFFER, crt.fbo[0]);
+		crt.looked++;
+		learn_swap();
+		if (crt.swap >= 0)
+			crt.blurred = 0;
+	}
+	crt.copies++;
+	float swap = crt.swap < 0 ? (format == SDL_ARGB8888 || format == SDL_XRGB8888) : (float)crt.swap;
+	if (!crt.blurred || !crt.upload_seen || crt.blurred_at != crt.uploads) {
+		gl.BindFramebuffer(GL_FRAMEBUFFER, crt.fbo[0]);
+		gl.Viewport(0, 0, CRT_SIZE, CRT_SIZE);
+		gl.UseProgram(crt.blur);
+		gl.Uniform1i(crt.blur_tex, 0);
+		gl.BindTexture(GL_TEXTURE_2D, crt.screen_gl);
+		gl.Uniform2f(crt.blur_step, 1.0f / CRT_SIZE, 0.0f);
+		gl.Uniform1f(crt.blur_bright, 1.0f);
+		gl.Uniform1f(crt.blur_swap, swap);
+		quad(-1.0f, -1.0f, 1.0f, 1.0f);
+		gl.BindFramebuffer(GL_FRAMEBUFFER, crt.fbo[1]);
+		gl.BindTexture(GL_TEXTURE_2D, crt.tex[0]);
+		gl.Uniform2f(crt.blur_step, 0.0f, 1.0f / CRT_SIZE);
+		gl.Uniform1f(crt.blur_bright, 0.0f);
+		gl.Uniform1f(crt.blur_swap, 0.0f);
+		quad(-1.0f, -1.0f, 1.0f, 1.0f);
+		crt.blurred = 1;
+		crt.blurred_at = crt.uploads;
+	}
+	gl.ActiveTexture(GL_TEXTURE1);
+	gl.BindTexture(GL_TEXTURE_2D, (GLuint)unit1);
+	gl.ActiveTexture(GL_TEXTURE0);
+	restore_gl(&saved);
+
+	/* SDL batches draws: run what PICO-8 queued before this copy, then draw
+	 * the screen over them. */
+	if (flush)
+		flush(renderer);
+	save_gl(&saved);
+	gl.ActiveTexture(GL_TEXTURE1);
+	gl.GetIntegerv(GL_TEXTURE_BINDING_2D, &unit1);
+	gl.ActiveTexture(GL_TEXTURE0);
+	gl.Disable(GL_BLEND);
+	gl.Disable(GL_SCISSOR_TEST);
+	gl.Disable(GL_DEPTH_TEST);
+	gl.Disable(GL_STENCIL_TEST);
+	gl.Disable(GL_CULL_FACE);
+	gl.ColorMask(1, 1, 1, 1);
+
+	/* The screen itself, where SDL would have put it. */
+	gl.BindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved.framebuffer);
+	gl.Viewport(0, 0, win_w, win_h);
+	gl.UseProgram(crt.final);
+	gl.Uniform1i(crt.final_tex, 0);
+	gl.Uniform1i(crt.final_glow, 1);
+	gl.Uniform1f(crt.final_swap, swap);
+	gl.Uniform1f(crt.final_foot, (float)CRT_SIZE / fh);
+	gl.Uniform3f(crt.final_gain, (float)hud->gain[0] / GAIN_ONE, (float)hud->gain[1] / GAIN_ONE,
+		     (float)hud->gain[2] / GAIN_ONE);
+	gl.ActiveTexture(GL_TEXTURE1);
+	gl.BindTexture(GL_TEXTURE_2D, crt.tex[1]);
+	gl.ActiveTexture(GL_TEXTURE0);
+	gl.BindTexture(GL_TEXTURE_2D, crt.screen_gl);
+	quad(fx / (float)win_w * 2.0f - 1.0f, 1.0f - (fy + fh) / (float)win_h * 2.0f,
+	     (fx + fw) / (float)win_w * 2.0f - 1.0f, 1.0f - fy / (float)win_h * 2.0f);
+
+	gl.ActiveTexture(GL_TEXTURE1);
+	gl.BindTexture(GL_TEXTURE_2D, (GLuint)unit1);
+	gl.ActiveTexture(GL_TEXTURE0);
+	restore_gl(&saved);
+	return 1;
+}
+
+/* PICO-8 puts its screen in its texture one of these two ways. Either tells
+ * the CRT look the screen changed, so it blurs it again. */
+int SDL_UpdateTexture(void *texture, const void *rect, const void *pixels, int pitch)
+{
+	static int (*real)(void *, const void *, const void *, int);
+	if (!real)
+		*(void **)&real = dlsym(RTLD_NEXT, "SDL_UpdateTexture");
+	if (!real)
+		return -1;
+	int r = real(texture, rect, pixels, pitch);
+	crt_uploaded(texture);
+	return r;
+}
+
+void SDL_UnlockTexture(void *texture)
+{
+	static void (*real)(void *);
+	if (!real)
+		*(void **)&real = dlsym(RTLD_NEXT, "SDL_UnlockTexture");
+	if (real)
+		real(texture);
+	crt_uploaded(texture);
+}
+
 /* PICO-8 draws its screen with SDL_RenderCopy: tint it by slot's blue light
- * and dim gain, as slot's compositor tints its frames. */
+ * and dim gain, as slot's compositor tints its frames, or draw it with the
+ * CRT look when slot's PICO-8 shader is CRT. */
 int SDL_RenderCopy(void *renderer, void *texture, const void *src, const void *dst)
 {
+	if (texture && shared() && hud->shader == SHADER_CRT &&
+	    crt_copy(renderer, texture, (const Rect *)src, (const Rect *)dst))
+		return 0;
 	static int (*real)(void *, void *, const void *, const void *);
 	static int (*color_mod)(void *, uint8_t, uint8_t, uint8_t);
 	static int logged;

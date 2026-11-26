@@ -5105,6 +5105,9 @@ impl App {
             Shader::Dot => ScreenEffect::Dot,
             Shader::Simpletex => ScreenEffect::Simpletex,
             Shader::Shimmerless => ScreenEffect::Shimmerless,
+            // Only the owner's PICO-8 draws it so far, in its SDL shim; fake-08's
+            // frames stay as they are.
+            Shader::Crt => ScreenEffect::None,
         }
     }
 
@@ -7263,6 +7266,7 @@ impl App {
             Shader::Dot => Toast::ShaderDot,
             Shader::Simpletex => Toast::ShaderSimpletex,
             Shader::Shimmerless => Toast::ShaderShimmerless,
+            Shader::Crt => Toast::ShaderCrt,
         };
         self.persist();
         self.hud.toast(said, self.now());
@@ -16559,6 +16563,7 @@ fn shader_value(shader: Shader) -> QuickValue {
         Shader::Dot => QuickValue::Dot,
         Shader::Simpletex => QuickValue::Simpletex,
         Shader::Shimmerless => QuickValue::Shimmerless,
+        Shader::Crt => QuickValue::Crt,
     }
 }
 

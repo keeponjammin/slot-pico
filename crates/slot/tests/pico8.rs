@@ -1346,3 +1346,22 @@ fn a_host_that_never_resolves_is_given_up_on() {
     assert!(pico8::resolves("http://127.0.0.1:9/x", wait));
     assert!(pico8::resolves("http://localhost/x", wait));
 }
+
+#[test]
+fn the_crt_look_is_pico8s_own_and_is_kept() {
+    use slot_store::Shader;
+    assert!(Shader::PICO8.contains(&Shader::Crt));
+    assert!(
+        !Shader::GB.contains(&Shader::Crt) && !Shader::GBA.contains(&Shader::Crt),
+        "the CRT look is PICO-8's own"
+    );
+    let d = TempDir::new().unwrap();
+    slot::root::ensure(d.path());
+    let mut state = slot_store::read_slot_state(d.path());
+    state.shader_pico8 = Shader::Crt;
+    state.shader_gb = Shader::Crt;
+    slot_store::write_slot_state(d.path(), &state).unwrap();
+    let back = slot_store::read_slot_state(d.path());
+    assert_eq!(back.shader_pico8, Shader::Crt);
+    assert_ne!(back.shader_gb, Shader::Crt, "the Game Boy has no CRT look");
+}
