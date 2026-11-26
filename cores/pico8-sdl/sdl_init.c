@@ -795,8 +795,8 @@ static const char *crt_final_fs =
 	"const float BRIGHT = 1.04;\n"
 	"const float SCAN_DEPTH = 0.22;\n"
 	"const float SCAN_WIDTH = 0.13;\n"
-	"const float GLOW = 0.85;\n"
-	"const float GLOW_WIDE = 0.60;\n"
+	"const float GLOW = 0.50;\n"
+	"const float GLOW_WIDE = 0.45;\n"
 	"const float VIGNETTE = 0.07;\n"
 	/* The dark line sits at the foot of each row, centred on the last
 	 * window row of it when PICO-8 is scaled by a whole number. */
@@ -810,7 +810,6 @@ static const char *crt_final_fs =
 	"    vec2 p = v * SIZE;\n"
 	"    mediump vec3 c = texture2D(tex, (floor(p) + 0.5) / SIZE).rgb;\n"
 	"    c = mix(c, c.bgr, swap);\n"
-	"    mediump vec3 own = c * smoothstep(0.2, 0.85, max(c.r, max(c.g, c.b)));\n"
 	"    c = pow(c, vec3(GAMMA));\n"
 	"    mediump float l = dot(c, vec3(0.299, 0.587, 0.114));\n"
 	"    c = clamp(mix(vec3(l), c, SATURATION) * BRIGHT, 0.0, 1.0);\n"
@@ -818,13 +817,12 @@ static const char *crt_final_fs =
 	"    mediump float s = 0.25 * (scan(p.y - 1.5 * q) + scan(p.y - 0.5 * q)\n"
 	"                    + scan(p.y + 0.5 * q) + scan(p.y + 1.5 * q));\n"
 	"    mediump vec3 near = texture2D(glow, v).rgb;\n"
-	"    vec2 o = vec2(7.0 / SIZE);\n"
+	"    vec2 o = vec2(6.0 / SIZE);\n"
 	"    mediump vec3 wide = 0.25 * (texture2D(glow, v + o).rgb + texture2D(glow, v - o).rgb\n"
 	"                      + texture2D(glow, v + vec2(o.x, -o.y)).rgb\n"
 	"                      + texture2D(glow, v + vec2(-o.x, o.y)).rgb);\n"
-	/* The glow falls mostly around a bright pixel: of its own light it
-	 * keeps a quarter near and a bit more wide, so colours stay true. */
-	"    c = c * s + max(near - 0.75 * own, 0.0) * GLOW + max(wide - 0.4 * own, 0.0) * GLOW_WIDE;\n"
+	/* The scanlines go over the glow, so it never fills them in. */
+	"    c = clamp(c + near * GLOW + wide * GLOW_WIDE, 0.0, 1.0) * s;\n"
 	"    vec2 e = v * 2.0 - 1.0;\n"
 	"    c *= 1.0 - VIGNETTE * dot(e, e);\n"
 	"    gl_FragColor = vec4(clamp(c, 0.0, 1.0) * gain, 1.0);\n"
