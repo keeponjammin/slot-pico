@@ -87,8 +87,8 @@ impl Glow {
             gl::UseProgram(self.prog);
             gl::ActiveTexture(gl::TEXTURE0);
             for (pass, (src, step, bright)) in [
-                (game, [1.0 / SRC_W as f32, 0.0], 1.0),
-                (self.tex[0], [0.0, 1.0 / SRC_H as f32], 0.0),
+                (game, [2.0 / SRC_W as f32, 0.0], 1.0),
+                (self.tex[0], [0.0, 2.0 / SRC_H as f32], 0.0),
             ]
             .into_iter()
             .enumerate()

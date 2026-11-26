@@ -1,4 +1,4 @@
-use slot::pico8_menu::{frame_rgba, hidden, Menu, Step, ROWS};
+use slot::pico8_menu::{frame_rgba, hidden, next_shader, shader_value, Menu, Step, ROWS};
 use slot_input::{Action, Btn, Context, Gestures, RawEvent, MENU_HOLD_MS};
 use slot_ui::QuickRow;
 
@@ -18,8 +18,17 @@ fn press(g: &mut Gestures, m: &mut Menu, btn: Btn, at: u64, held: u64) -> Vec<St
 }
 
 #[test]
-fn pico8_only_gets_resume_and_exit_game() {
-    assert_eq!(QuickRow::Resume.shown(&hidden()), ROWS.to_vec());
+fn pico8_only_gets_resume_its_shader_and_exit_game() {
+    assert_eq!(
+        QuickRow::Resume.shown(&hidden()),
+        [
+            QuickRow::Resume,
+            QuickRow::Pico8PlayShader,
+            QuickRow::ExitGame
+        ]
+    );
+    assert_eq!(ROWS.to_vec(), QuickRow::Resume.shown(&hidden()));
+    assert_eq!(QuickRow::Pico8PlayShader.label(), "Shader");
 }
 
 #[test]
@@ -33,13 +42,63 @@ fn a_menu_tap_opens_on_resume_and_b_carries_on() {
 }
 
 #[test]
-fn exit_game_is_one_down_and_a_leaves() {
+fn exit_game_is_two_down_and_a_leaves() {
     let (mut g, mut m) = (Gestures::new(), Menu::default());
     press(&mut g, &mut m, Btn::Menu, 0, 100);
     g.set_context(Context::Menu);
     assert_eq!(press(&mut g, &mut m, Btn::Down, 1000, 80), [Step::Moved]);
+    assert_eq!(press(&mut g, &mut m, Btn::Down, 1500, 80), [Step::Moved]);
     assert_eq!(m.row(), Some(QuickRow::ExitGame));
     assert_eq!(press(&mut g, &mut m, Btn::A, 2000, 80), [Step::Quit]);
+}
+
+#[test]
+fn the_shader_row_steps_the_shader_and_stays_open() {
+    let (mut g, mut m) = (Gestures::new(), Menu::default());
+    press(&mut g, &mut m, Btn::Menu, 0, 100);
+    g.set_context(Context::Menu);
+    assert_eq!(press(&mut g, &mut m, Btn::Down, 1000, 80), [Step::Moved]);
+    assert_eq!(m.row(), Some(QuickRow::Pico8PlayShader));
+    assert_eq!(
+        press(&mut g, &mut m, Btn::Right, 2000, 80),
+        [Step::Shader(true)]
+    );
+    assert_eq!(
+        press(&mut g, &mut m, Btn::Left, 3000, 80),
+        [Step::Shader(false)]
+    );
+    assert_eq!(
+        press(&mut g, &mut m, Btn::A, 4000, 80),
+        [Step::Shader(true)]
+    );
+    assert!(m.is_open(), "changing the shader closed the menu");
+    assert_eq!(press(&mut g, &mut m, Btn::B, 5000, 80), [Step::Resume]);
+}
+
+#[test]
+fn the_owners_pico8_steps_through_the_shaders_fake08_has() {
+    use slot_store::Shader;
+    use slot_ui::QuickValue;
+    let mut s = Shader::Off;
+    let mut seen = Vec::new();
+    for _ in 0..Shader::PICO8.len() {
+        s = next_shader(s, true);
+        seen.push(s);
+    }
+    assert_eq!(
+        seen,
+        [Shader::Grid, Shader::Shimmerless, Shader::Crt, Shader::Off]
+    );
+    assert_eq!(next_shader(Shader::Off, false), Shader::Crt);
+    assert_eq!(next_shader(Shader::Grid, false), Shader::Off);
+    for (s, v) in [
+        (Shader::Off, QuickValue::Off),
+        (Shader::Grid, QuickValue::Grid),
+        (Shader::Shimmerless, QuickValue::Shimmerless),
+        (Shader::Crt, QuickValue::Crt),
+    ] {
+        assert_eq!(shader_value(s), v);
+    }
 }
 
 #[test]

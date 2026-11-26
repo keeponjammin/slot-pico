@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Your own copy of PICO-8 now has all of PICO-8's shaders, as fake-08 does: Grid, Shimmerless and CRT. Pick one under Settings → Screen → PICO-8 → Shader, or from the new Shader row in the menu while PICO-8 plays; the whole screen changes at once.
+- CRT now also shows on your own copy of PICO-8 when PICO-8 scales its screen up before drawing it, which is when it showed nothing before.
+- CRT glows much more around bright pixels, on fake-08 and on your own PICO-8 alike, while colours stay true.
+
 ## [1.16.0.3]
 
 - PICO-8's CRT shader now shows on fake-08 too, so every PICO-8 cart gets the same scanlines, glow and colours whichever core plays it.
