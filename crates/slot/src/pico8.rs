@@ -1317,7 +1317,7 @@ mod runner {
             Some(s) => {
                 s.set_volume(crate::pico8_hud::output_volume(&state, headphones));
                 s.set_gain(crate::pico8_hud::screen_gain(&state));
-                s.set_crt(state.shader_pico8 == slot_store::Shader::Crt);
+                s.set_shader(state.shader_pico8);
                 256
             }
             None => volume(&state, headphones),
@@ -1708,7 +1708,7 @@ mod runner {
                         eprintln!("slot: pico8: menu: shader {}", state.shader_pico8.name());
                         // The shim draws the new look as soon as PICO-8 carries on.
                         if let Some(s) = shared {
-                            s.set_crt(state.shader_pico8 == slot_store::Shader::Crt);
+                            s.set_shader(state.shader_pico8);
                         }
                         unsaved = Some(now);
                         if let (Some(o), Some(row)) = (overlay.as_mut(), menu.row()) {

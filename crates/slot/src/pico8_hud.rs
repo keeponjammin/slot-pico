@@ -223,10 +223,22 @@ pub mod layout {
     /// `screen_gain`'s red, green and blue, times `GAIN_ONE`.
     pub const W_GAIN: usize = 6;
     pub const GAIN_ONE: u32 = 65535;
-    /// The look PICO-8's screen gets: `SHADER_OFF` or `SHADER_CRT`.
+    /// The look PICO-8's screen gets: one of the `SHADER_*`.
     pub const W_SHADER: usize = 9;
     pub const SHADER_OFF: u32 = 0;
     pub const SHADER_CRT: u32 = 1;
+    pub const SHADER_GRID: u32 = 2;
+    pub const SHADER_SHIMMERLESS: u32 = 3;
+
+    /// The word for `shader`. Any other draws as Off.
+    pub fn shader_word(shader: slot_store::Shader) -> u32 {
+        match shader {
+            slot_store::Shader::Crt => SHADER_CRT,
+            slot_store::Shader::Grid => SHADER_GRID,
+            slot_store::Shader::Shimmerless => SHADER_SHIMMERLESS,
+            _ => SHADER_OFF,
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -298,10 +310,10 @@ mod shared {
             }
         }
 
-        /// Whether the shim draws PICO-8's screen with slot's CRT look.
-        pub fn set_crt(&self, on: bool) {
-            let shader = if on { SHADER_CRT } else { SHADER_OFF };
-            self.word(W_SHADER).store(shader, Ordering::Release);
+        /// The shader the shim draws PICO-8's screen with.
+        pub fn set_shader(&self, shader: slot_store::Shader) {
+            self.word(W_SHADER)
+                .store(shader_word(shader), Ordering::Release);
         }
 
         /// Puts `rgba`, premultiplied and `w` by `h`, on screen.

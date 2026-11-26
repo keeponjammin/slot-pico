@@ -92,8 +92,8 @@ const float crt_saturation = 1.25;
 const float crt_bright = 1.04;
 const float crt_scan_depth = 0.22;
 const float crt_scan_width = 0.13;
-const float crt_glow = 0.18;
-const float crt_glow_wide = 0.10;
+const float crt_glow = 0.85;
+const float crt_glow_wide = 0.60;
 const float crt_vignette = 0.07;
 float crt_scan(float y, float foot) {
     float centre = 1.0 - 0.5 * min(foot, 0.34);
@@ -113,6 +113,7 @@ void main() {
         // pixel, `foot` rows tall), the glow laid over it near and wide, and a faint vignette.
         float foot = u_uv.w * u_src.y / (u_rect.w * u_fbo.y);
         float y = uv.y * u_src.y;
+        mediump vec3 own = c * smoothstep(0.2, 0.85, max(c.r, max(c.g, c.b)));
         mediump vec3 k = pow(c, vec3(crt_gamma));
         mediump float l = dot(k, vec3(0.299, 0.587, 0.114));
         k = clamp(mix(vec3(l), k, crt_saturation) * crt_bright, 0.0, 1.0);
@@ -120,11 +121,13 @@ void main() {
         mediump float s = 0.25 * (crt_scan(y - 1.5 * q, foot) + crt_scan(y - 0.5 * q, foot)
                         + crt_scan(y + 0.5 * q, foot) + crt_scan(y + 1.5 * q, foot));
         mediump vec3 near = texture2D(u_glow, uv).rgb;
-        vec2 o = vec2(5.0) / u_src;
+        vec2 o = vec2(7.0) / u_src;
         mediump vec3 wide = 0.25 * (texture2D(u_glow, uv + o).rgb + texture2D(u_glow, uv - o).rgb
                           + texture2D(u_glow, uv + vec2(o.x, -o.y)).rgb
                           + texture2D(u_glow, uv + vec2(-o.x, o.y)).rgb);
-        k = k * s + near * crt_glow + wide * crt_glow_wide;
+        // The glow falls mostly around a bright pixel: of its own light it keeps a quarter near
+        // and a bit more wide, so colours stay true.
+        k = k * s + max(near - 0.75 * own, 0.0) * crt_glow + max(wide - 0.4 * own, 0.0) * crt_glow_wide;
         vec2 e = (uv - u_pic.xy) / (u_pic.zw - u_pic.xy) * 2.0 - 1.0;
         k *= 1.0 - crt_vignette * dot(e, e);
         c = clamp(k, 0.0, 1.0);
@@ -202,8 +205,9 @@ void main() {
 }
 "#;
 
-/// One direction of a 9-tap Gaussian (sigma 1.6 game pixels), as the PICO-8 SDL shim blurs. In
-/// the first pass `u_bright` keeps only what glows: nothing of dark colours, all of the brightest.
+/// One direction of a 9-tap Gaussian, `u_step` apart (two game pixels: sigma 3.2 of them), as the
+/// PICO-8 SDL shim blurs. In the first pass `u_bright` keeps only what glows: nothing of dark
+/// colours, all of the brightest.
 pub const GLOW_FRAG: &str = r#"
 precision mediump float;
 uniform sampler2D u_tex;
@@ -213,7 +217,7 @@ varying vec2 v_uv;
 vec3 at(float k) {
     vec3 c = texture2D(u_tex, v_uv + u_step * k).rgb;
     float m = max(c.r, max(c.g, c.b));
-    return c * mix(1.0, smoothstep(0.35, 1.0, m), u_bright);
+    return c * mix(1.0, smoothstep(0.2, 0.85, m), u_bright);
 }
 void main() {
     vec3 s = at(0.0) * 0.2466;

@@ -13,16 +13,16 @@ use slot_ui::{QuickRow, QuickValue};
 
 /// The rows PICO-8 gets. slot keeps no save states for it, its screenshots
 /// are PICO-8's own, and of its settings only the shader changes while it
-/// plays: the shim draws the CRT look, and nothing else of the screen.
+/// plays: the shim draws slot's shaders, and nothing else of the screen.
 pub const ROWS: [QuickRow; 3] = [
     QuickRow::Resume,
     QuickRow::Pico8PlayShader,
     QuickRow::ExitGame,
 ];
 
-/// The shaders the owner's PICO-8 is drawn with. Grid and Shimmerless are
-/// slot's compositor's, which only fake-08's frames go through.
-pub const SHADERS: [Shader; 2] = [Shader::Off, Shader::Crt];
+/// The shaders the owner's PICO-8 is drawn with: the shim draws each of
+/// PICO-8's, as slot's compositor draws them for fake-08.
+pub const SHADERS: [Shader; 4] = Shader::PICO8;
 
 /// The shader after `shader`, stepping left or right through `SHADERS`. One
 /// it does not draw counts as Off.
@@ -40,6 +40,8 @@ pub fn next_shader(shader: Shader, right: bool) -> Shader {
 pub fn shader_value(shader: Shader) -> QuickValue {
     match shader {
         Shader::Crt => QuickValue::Crt,
+        Shader::Grid => QuickValue::Grid,
+        Shader::Shimmerless => QuickValue::Shimmerless,
         _ => QuickValue::Off,
     }
 }

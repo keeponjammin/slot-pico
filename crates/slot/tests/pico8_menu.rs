@@ -76,18 +76,28 @@ fn the_shader_row_steps_the_shader_and_stays_open() {
 }
 
 #[test]
-fn the_owners_pico8_steps_between_off_and_crt() {
+fn the_owners_pico8_steps_through_the_shaders_fake08_has() {
     use slot_store::Shader;
-    for right in [true, false] {
-        assert_eq!(next_shader(Shader::Off, right), Shader::Crt);
-        assert_eq!(next_shader(Shader::Crt, right), Shader::Off);
-        // Grid and Shimmerless are fake-08's: the owner's PICO-8 draws them as Off.
-        assert_eq!(next_shader(Shader::Grid, right), Shader::Crt);
-        assert_eq!(next_shader(Shader::Shimmerless, right), Shader::Crt);
+    use slot_ui::QuickValue;
+    let mut s = Shader::Off;
+    let mut seen = Vec::new();
+    for _ in 0..Shader::PICO8.len() {
+        s = next_shader(s, true);
+        seen.push(s);
     }
-    assert_eq!(shader_value(Shader::Crt), slot_ui::QuickValue::Crt);
-    for s in [Shader::Off, Shader::Grid, Shader::Shimmerless] {
-        assert_eq!(shader_value(s), slot_ui::QuickValue::Off);
+    assert_eq!(
+        seen,
+        [Shader::Grid, Shader::Shimmerless, Shader::Crt, Shader::Off]
+    );
+    assert_eq!(next_shader(Shader::Off, false), Shader::Crt);
+    assert_eq!(next_shader(Shader::Grid, false), Shader::Off);
+    for (s, v) in [
+        (Shader::Off, QuickValue::Off),
+        (Shader::Grid, QuickValue::Grid),
+        (Shader::Shimmerless, QuickValue::Shimmerless),
+        (Shader::Crt, QuickValue::Crt),
+    ] {
+        assert_eq!(shader_value(s), v);
     }
 }
 
