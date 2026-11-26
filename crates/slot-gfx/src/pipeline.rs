@@ -1,4 +1,5 @@
 use crate::ghost::{FrameBlend, Ghost, Lcd};
+use crate::glow::Glow;
 use crate::lcd3x::ScreenEffect;
 use crate::power::{screen_brightness, screen_rect_above};
 use crate::quad::Quad;
@@ -21,6 +22,8 @@ pub struct GamePass {
     blend: FrameBlend,
     lcd: Lcd,
     ghost: Ghost,
+    /// The CRT look's glow, kept only while the effect is `Crt`.
+    glow: Glow,
     u_rect: gl::types::GLint,
     u_bright: gl::types::GLint,
     u_uv: gl::types::GLint,
@@ -75,6 +78,7 @@ impl GamePass {
             u_bright = crate::gl::uniform_location(prog, "u_bright");
             u_uv = crate::gl::uniform_location(prog, "u_uv");
             gl::Uniform1i(crate::gl::uniform_location(prog, "u_paper"), 1);
+            gl::Uniform1i(crate::gl::uniform_location(prog, "u_glow"), 2);
             u_mode = crate::gl::uniform_location(prog, "u_mode");
             u_paper_size = crate::gl::uniform_location(prog, "u_paper_size");
             u_fbo = crate::gl::uniform_location(prog, "u_fbo");
@@ -89,6 +93,7 @@ impl GamePass {
             blend: FrameBlend::Off,
             lcd: Lcd::Gba,
             ghost: Ghost::new()?,
+            glow: Glow::new()?,
             u_rect,
             u_bright,
             u_uv,
@@ -167,7 +172,16 @@ impl GamePass {
     }
 
     pub fn set_effect(&mut self, effect: ScreenEffect) {
+        if effect != self.effect {
+            self.glow.reset();
+        }
         self.effect = effect;
+    }
+
+    /// A texture's pixels changed behind the pass's back: a still drawn with the CRT look gets
+    /// its glow again.
+    pub fn forget_glow(&mut self) {
+        self.glow.reset();
     }
 
     pub fn set_blend(&mut self, blend: FrameBlend, quad: &Quad) {
@@ -191,6 +205,7 @@ impl GamePass {
 
     fn reblend(&mut self, quad: &Quad) {
         self.ghost.reset();
+        self.glow.reset();
         let (game, last) = (self.game[self.at], self.game[1 - self.at]);
         match (self.blend, self.held) {
             (_, 0) | (FrameBlend::Off, _) => {}
@@ -252,6 +267,20 @@ impl GamePass {
             FrameBlend::Mix => self.ghost.mix(game, last, quad),
             FrameBlend::Ghosting => self.ghost.respond(game, self.lcd.response(), quad),
         }
+        // The game textures take turns, so a texture can hold new pixels under a name the glow
+        // was already made of.
+        self.glow.reset();
+        if self.effect == ScreenEffect::Crt {
+            self.glow.blur(self.shown(), quad);
+        }
+    }
+
+    fn shown(&self) -> gl::types::GLuint {
+        let game = self.game[self.at];
+        match self.blend {
+            FrameBlend::Off => game,
+            FrameBlend::Mix | FrameBlend::Ghosting => self.ghost.texture().unwrap_or(game),
+        }
     }
 
     pub fn draw(&self, quad: &Quad) {
@@ -261,12 +290,7 @@ impl GamePass {
             }
             _ => self.src,
         };
-        let game = self.game[self.at];
-        let shown = match self.blend {
-            FrameBlend::Off => game,
-            FrameBlend::Mix | FrameBlend::Ghosting => self.ghost.texture().unwrap_or(game),
-        };
-        self.draw_source(shown, quad, src, self.layout);
+        self.draw_source(self.shown(), quad, src, self.layout);
     }
 
     pub fn draw_still(&self, tex: gl::types::GLuint, quad: &Quad) {
@@ -286,6 +310,9 @@ impl GamePass {
         if self.bottom > 0.0 {
             src[3] *= (OUT_H as f32 - self.bottom) / OUT_H as f32;
         }
+        // Blurred at upload, so this only blurs for a still or straight after a change of
+        // effect. It binds its own program, so it goes before this pass's uniforms.
+        let glow = (self.effect == ScreenEffect::Crt).then(|| self.glow.of(tex, quad));
         unsafe {
             gl::UseProgram(self.prog);
             gl::Uniform4f(self.u_rect, x, y, w, h);
@@ -302,6 +329,10 @@ impl GamePass {
                 self.pic[2],
                 self.pic[3],
             );
+            if let Some(glow) = glow {
+                gl::ActiveTexture(gl::TEXTURE2);
+                gl::BindTexture(gl::TEXTURE_2D, glow);
+            }
             gl::ActiveTexture(gl::TEXTURE1);
             gl::BindTexture(gl::TEXTURE_2D, self.paper);
             gl::ActiveTexture(gl::TEXTURE0);

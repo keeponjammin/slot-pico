@@ -11,6 +11,7 @@ mod ds;
 mod fbdev;
 mod fbo;
 mod ghost;
+mod glow;
 mod gl;
 mod grade;
 #[cfg(target_os = "macos")]

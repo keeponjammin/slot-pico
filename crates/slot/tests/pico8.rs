@@ -1365,3 +1365,16 @@ fn the_crt_look_is_pico8s_own_and_is_kept() {
     assert_eq!(back.shader_pico8, Shader::Crt);
     assert_ne!(back.shader_gb, Shader::Crt, "the Game Boy has no CRT look");
 }
+
+#[test]
+fn a_cart_on_fake08_gets_the_crt_look_too() {
+    let d = TempDir::new().unwrap();
+    slot::root::ensure(d.path());
+    let mut state = slot_store::read_slot_state(d.path());
+    state.shader_pico8 = slot_store::Shader::Crt;
+    state.shader_gba = slot_store::Shader::Grid;
+    slot_store::write_slot_state(d.path(), &state).unwrap();
+    let (a, _turn) = playing_on_fake08(d.path());
+    assert_eq!(a.screen_shader(), slot_store::Shader::Crt);
+    assert_eq!(a.screen_effect(), slot_gfx::ScreenEffect::Crt);
+}

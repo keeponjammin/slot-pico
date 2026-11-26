@@ -5105,9 +5105,8 @@ impl App {
             Shader::Dot => ScreenEffect::Dot,
             Shader::Simpletex => ScreenEffect::Simpletex,
             Shader::Shimmerless => ScreenEffect::Shimmerless,
-            // Only the owner's PICO-8 draws it so far, in its SDL shim; fake-08's
-            // frames stay as they are.
-            Shader::Crt => ScreenEffect::None,
+            // The owner's PICO-8 draws it in its SDL shim, with the same look.
+            Shader::Crt => ScreenEffect::Crt,
         }
     }
 
