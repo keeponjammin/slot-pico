@@ -24,6 +24,9 @@ concurrency:
 jobs:
   deploy:
     name: site
+    # slot's guide at slot-cfw.fyi. Forks have no Pages site of their own (and devices on this
+    # fork update from its releases), so the job only runs in slot's own repository.
+    if: github.repository == 'slot-cfw/slot'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
