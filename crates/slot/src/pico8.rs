@@ -1687,6 +1687,7 @@ mod runner {
                         o.set_backdrop(s);
                         o.seat(root, state);
                         o.set_status(platform.battery(), state.battery_display, &clock_text(state));
+                        o.set_shader(state.shader_pico8);
                         let ready = asked.elapsed();
                         if let Some(row) = menu.row() {
                             o.show(row, &hidden);
@@ -1698,6 +1699,20 @@ mod runner {
                     }
                     Step::Moved => {
                         if let (Some(o), Some(row)) = (overlay.as_mut(), menu.row()) {
+                            o.draw(row, &hidden);
+                        }
+                    }
+                    Step::Shader(right) => {
+                        state.shader_pico8 =
+                            crate::pico8_menu::next_shader(state.shader_pico8, right);
+                        eprintln!("slot: pico8: menu: shader {}", state.shader_pico8.name());
+                        // The shim draws the new look as soon as PICO-8 carries on.
+                        if let Some(s) = shared {
+                            s.set_crt(state.shader_pico8 == slot_store::Shader::Crt);
+                        }
+                        unsaved = Some(now);
+                        if let (Some(o), Some(row)) = (overlay.as_mut(), menu.row()) {
+                            o.set_shader(state.shader_pico8);
                             o.draw(row, &hidden);
                         }
                     }

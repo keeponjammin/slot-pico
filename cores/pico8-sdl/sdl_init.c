@@ -718,7 +718,14 @@ static struct {
 	int upload_seen;             /* 1 once an upload to `screen` was seen */
 	unsigned long blurred_at;    /* `uploads` when tex[1] was last blurred */
 	int blurred;                 /* 1 while tex[1] holds a blur of `screen` */
-} crt = { .swap = -1 };
+	/* The last texture that looked like PICO-8's screen, whichever look it
+	 * was drawn with, and where all of it goes (dst as SDL takes it), so a
+	 * change of look can draw the whole screen again. */
+	void *last;
+	Rect whole;
+	int drawn_as;                /* -1 at first, then the SHADER_* last drawn */
+	int redraw;                  /* frames left to draw `last` whole again */
+} crt = { .swap = -1, .drawn_as = -1 };
 
 /* Read the screen back to learn `swap` at most this often, this many times:
  * each read makes the CPU wait for the GPU. */
@@ -926,6 +933,75 @@ static void quad(GLfloat x0, GLfloat y0, GLfloat x1, GLfloat y1)
 	gl.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
+/* Whether `texture` is PICO-8's screen: square, 128 pixels or a whole
+ * multiple of it (PICO-8 can scale its screen up before it copies it), and
+ * copied straight to the window. Says once why a copy is not. */
+static int is_screen(void *renderer, void *texture, uint32_t *format, int *tw, int *th)
+{
+	static int (*query)(void *, uint32_t *, int *, int *, int *);
+	static void *(*target)(void *);
+	static int said[4][2], said_target;
+	if (!query) {
+		*(void **)&query = dlsym(RTLD_NEXT, "SDL_QueryTexture");
+		*(void **)&target = dlsym(RTLD_NEXT, "SDL_GetRenderTarget");
+	}
+	int access = 0;
+	if (!query || !target || query(texture, format, &access, tw, th))
+		return 0;
+	if (*tw != *th || *tw < CRT_SIZE || *tw % CRT_SIZE != 0 || *tw > 8 * CRT_SIZE) {
+		/* The first few sizes, so a cursor's texture cannot hide the screen's. */
+		for (int i = 0; i < 4; i++) {
+			if (said[i][0] == *tw && said[i][1] == *th)
+				break;
+			if (said[i][0] == 0) {
+				said[i][0] = *tw;
+				said[i][1] = *th;
+				fprintf(stderr, "slot: pico8: crt: passes over a %dx%d texture (format 0x%x)\n",
+					*tw, *th, *format);
+				break;
+			}
+		}
+		return 0;
+	}
+	if (target(renderer)) {
+		if (!said_target) {
+			said_target = 1;
+			fprintf(stderr, "slot: pico8: crt: PICO-8 copies its %dx%d screen into a texture, not the window\n",
+				*tw, *th);
+		}
+		return 0;
+	}
+	return 1;
+}
+
+static int round_int(float f)
+{
+	return (int)(f < 0.0f ? f - 0.5f : f + 0.5f);
+}
+
+/* Where all of `texture` goes when `src` of it is copied to `dst`, as a dst
+ * SDL_RenderCopy takes (inside the viewport, in the renderer's units). */
+static int whole_rect(void *renderer, int tw, int th, const Rect *src, const Rect *dst, Rect *whole)
+{
+	static void (*viewport)(void *, Rect *);
+	if (!viewport)
+		*(void **)&viewport = dlsym(RTLD_NEXT, "SDL_RenderGetViewport");
+	if (!viewport)
+		return 0;
+	Rect vp;
+	viewport(renderer, &vp);
+	Rect s = src ? *src : (Rect){ 0, 0, tw, th };
+	Rect d = dst ? *dst : (Rect){ 0, 0, vp.w, vp.h };
+	if (s.w <= 0 || s.h <= 0 || d.w <= 0 || d.h <= 0)
+		return 0;
+	float kx = (float)d.w / (float)s.w, ky = (float)d.h / (float)s.h;
+	whole->x = round_int((float)d.x - (float)s.x * kx);
+	whole->y = round_int((float)d.y - (float)s.y * ky);
+	whole->w = round_int((float)tw * kx);
+	whole->h = round_int((float)th * ky);
+	return 1;
+}
+
 /* Draws `texture` (PICO-8's screen) the way SDL_RenderCopy would place it,
  * with the CRT look. Returns 0 when it did not, so SDL draws it instead. */
 static int crt_copy(void *renderer, void *texture, const Rect *src, const Rect *dst)
@@ -957,10 +1033,8 @@ static int crt_copy(void *renderer, void *texture, const Rect *src, const Rect *
 		}
 	}
 	uint32_t format = 0;
-	int access = 0, tw = 0, th = 0;
-	if (query(texture, &format, &access, &tw, &th) || tw != CRT_SIZE || th != CRT_SIZE)
-		return 0;
-	if (target(renderer))
+	int tw = 0, th = 0;
+	if (!is_screen(renderer, texture, &format, &tw, &th))
 		return 0;
 	int win_w = 0, win_h = 0;
 	if (output_size(renderer, &win_w, &win_h) || win_w <= 0 || win_h <= 0)
@@ -1133,14 +1207,10 @@ void SDL_UnlockTexture(void *texture)
 	crt_uploaded(texture);
 }
 
-/* PICO-8 draws its screen with SDL_RenderCopy: tint it by slot's blue light
- * and dim gain, as slot's compositor tints its frames, or draw it with the
- * CRT look when slot's PICO-8 shader is CRT. */
-int SDL_RenderCopy(void *renderer, void *texture, const void *src, const void *dst)
+/* What SDL_RenderCopy does without the CRT look: tinted by slot's blue
+ * light and dim gain, as slot's compositor tints its frames. */
+static int plain_copy(void *renderer, void *texture, const void *src, const void *dst)
 {
-	if (texture && shared() && hud->shader == SHADER_CRT &&
-	    crt_copy(renderer, texture, (const Rect *)src, (const Rect *)dst))
-		return 0;
 	static int (*real)(void *, void *, const void *, const void *);
 	static int (*color_mod)(void *, uint8_t, uint8_t, uint8_t);
 	static int logged;
@@ -1162,6 +1232,48 @@ int SDL_RenderCopy(void *renderer, void *texture, const void *src, const void *d
 	return real(renderer, texture, src, dst);
 }
 
+/* PICO-8 draws its screen with SDL_RenderCopy: tint it, or draw it with the
+ * CRT look when slot's PICO-8 shader is CRT. Either way, keep where the
+ * whole screen goes, for when the look changes. */
+int SDL_RenderCopy(void *renderer, void *texture, const void *src, const void *dst)
+{
+	if (texture && shared()) {
+		uint32_t format = 0;
+		int tw = 0, th = 0;
+		Rect whole;
+		if (is_screen(renderer, texture, &format, &tw, &th) &&
+		    whole_rect(renderer, tw, th, (const Rect *)src, (const Rect *)dst, &whole)) {
+			crt.last = texture;
+			crt.whole = whole;
+		}
+		if (hud->shader == SHADER_CRT && crt_copy(renderer, texture, (const Rect *)src, (const Rect *)dst))
+			return 0;
+	}
+	return plain_copy(renderer, texture, src, dst);
+}
+
+/* PICO-8 only redraws what changes, so after the look changes (in slot's
+ * menu, say) the rest of its screen would keep the old one. Draw the whole
+ * screen again with the new look, for as many frames as the window keeps
+ * buffers, before the frame is shown. */
+static void crt_present(void *renderer)
+{
+	int as = hud->shader == SHADER_CRT ? SHADER_CRT : SHADER_OFF;
+	if (crt.drawn_as < 0)
+		crt.drawn_as = as;
+	if (as != crt.drawn_as) {
+		crt.drawn_as = as;
+		crt.redraw = HISTORY;
+		fprintf(stderr, "slot: pico8: crt: %s\n", as == SHADER_CRT ? "on" : "off");
+	}
+	if (crt.redraw <= 0 || !crt.last)
+		return;
+	crt.redraw--;
+	if (as == SHADER_CRT && crt_copy(renderer, crt.last, NULL, &crt.whole))
+		return;
+	plain_copy(renderer, crt.last, NULL, &crt.whole);
+}
+
 void SDL_RenderPresent(void *renderer)
 {
 	static void (*real)(void *);
@@ -1172,6 +1284,8 @@ void SDL_RenderPresent(void *renderer)
 	}
 	if (!real)
 		return;
+	if (shared())
+		crt_present(renderer);
 	if (shared() && !ov.failed && (hud->shown || ov.restoring > 0)) {
 		/* SDL batches PICO-8's draws until it presents: run them first,
 		 * so the strip goes over this frame and not under it. */

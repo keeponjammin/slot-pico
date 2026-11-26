@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- PICO-8's in-game menu has a Shader row: switch CRT on or off while your own copy of PICO-8 plays, and the whole screen changes at once.
+- CRT now also shows on your own copy of PICO-8 when PICO-8 scales its screen up before drawing it, which is when it showed nothing before.
+
 ## [1.16.0.3]
 
 - PICO-8's CRT shader now shows on fake-08 too, so every PICO-8 cart gets the same scanlines, glow and colours whichever core plays it.

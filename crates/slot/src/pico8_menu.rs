@@ -8,11 +8,41 @@
 //! cart everywhere else.
 
 use slot_input::{Action, Btn};
-use slot_ui::QuickRow;
+use slot_store::Shader;
+use slot_ui::{QuickRow, QuickValue};
 
 /// The rows PICO-8 gets. slot keeps no save states for it, its screenshots
-/// are PICO-8's own, and its settings are fixed when it starts.
-pub const ROWS: [QuickRow; 2] = [QuickRow::Resume, QuickRow::ExitGame];
+/// are PICO-8's own, and of its settings only the shader changes while it
+/// plays: the shim draws the CRT look, and nothing else of the screen.
+pub const ROWS: [QuickRow; 3] = [
+    QuickRow::Resume,
+    QuickRow::Pico8PlayShader,
+    QuickRow::ExitGame,
+];
+
+/// The shaders the owner's PICO-8 is drawn with. Grid and Shimmerless are
+/// slot's compositor's, which only fake-08's frames go through.
+pub const SHADERS: [Shader; 2] = [Shader::Off, Shader::Crt];
+
+/// The shader after `shader`, stepping left or right through `SHADERS`. One
+/// it does not draw counts as Off.
+pub fn next_shader(shader: Shader, right: bool) -> Shader {
+    let n = SHADERS.len();
+    let at = SHADERS.iter().position(|s| *s == shader).unwrap_or(0);
+    SHADERS[if right {
+        (at + 1) % n
+    } else {
+        (at + n - 1) % n
+    }]
+}
+
+/// What the shader row says: the look PICO-8 is drawn with.
+pub fn shader_value(shader: Shader) -> QuickValue {
+    match shader {
+        Shader::Crt => QuickValue::Crt,
+        _ => QuickValue::Off,
+    }
+}
 
 /// The rest of the in-game page, hidden.
 pub fn hidden() -> Vec<QuickRow> {
@@ -30,6 +60,8 @@ pub enum Step {
     Open,
     /// The menu changed: draw it again.
     Moved,
+    /// Step the shader, right or left, and draw the menu again.
+    Shader(bool),
     /// Put the screen back and let PICO-8 carry on.
     Resume,
     /// Leave PICO-8 for the shelf.
@@ -68,6 +100,10 @@ impl Menu {
             }
             (Some(row), Action::GbaDown(Btn::Up)) => self.move_to(row.up(&hidden)),
             (Some(row), Action::GbaDown(Btn::Down)) => self.move_to(row.down(&hidden)),
+            (Some(QuickRow::Pico8PlayShader), Action::GbaDown(Btn::Left)) => Step::Shader(false),
+            (Some(QuickRow::Pico8PlayShader), Action::GbaDown(Btn::Right | Btn::A)) => {
+                Step::Shader(true)
+            }
             (Some(QuickRow::ExitGame), Action::GbaDown(Btn::A)) => {
                 self.row = None;
                 Step::Quit
@@ -199,7 +235,8 @@ mod screen {
     use slot_store::{Cart, Platform, SlotState};
     use slot_ui::{
         draw_corners, ease, footer_ink, icon_face, quick_label_face, quick_legend_faces,
-        quick_pointer_face, word_ink, Hud, Icon, Printed, QuickMenu, QuickMenuFaces, QuickRow,
+        quick_pointer_face, quick_value_face, word_ink, Hud, Icon, Printed, QuickMenu,
+        QuickMenuFaces, QuickRow, QuickValue,
         SlotChrome, UndoFace, BOLT_PX, HINT_EDGE, HUD_ICON_PX, HUD_INK, MOUTH_H, PLATE_H,
     };
 
@@ -606,6 +643,8 @@ mod screen {
         /// stopped. The menu draws into the other buffer and shows it, so
         /// this one goes back on screen before PICO-8 carries on.
         home: Option<usize>,
+        /// What the shader row says.
+        shader: QuickValue,
     }
 
     /// What the menu uploads into the compositor, kept for the next time
@@ -695,6 +734,7 @@ mod screen {
                 tint: [1.0; 3],
                 mouth: None,
                 home: None,
+                shader: QuickValue::Off,
             }
         }
 
@@ -868,6 +908,11 @@ mod screen {
             });
         }
 
+        /// The shader the shader row shows.
+        pub fn set_shader(&mut self, shader: slot_store::Shader) {
+            self.shader = super::shader_value(shader);
+        }
+
         /// Opens the menu as slot does over a game: its rows over the
         /// dimmed game at once, the mouth sliding up along the bottom.
         pub fn show(&mut self, row: QuickRow, hidden: &[QuickRow]) {
@@ -926,10 +971,12 @@ mod screen {
                 });
             }
             if let Some((row, hidden)) = menu {
+                let mut values = [None; QuickRow::ALL.len()];
+                values[QuickRow::Pico8PlayShader.index()] = Some(self.shader);
                 QuickMenu {
                     row,
                     hidden,
-                    values: [None; QuickRow::ALL.len()],
+                    values,
                     clock: None,
                     wallpaper: None,
                     networks: None,
@@ -1078,6 +1125,15 @@ mod screen {
                 false => [(blank, 1, 1); 2],
             })
             .collect();
+        // Values only for the shader row, a blank for every other.
+        let shown = super::SHADERS.map(super::shader_value);
+        let values = QuickValue::ALL
+            .iter()
+            .map(|v| match shown.contains(v) {
+                true => [false, true].map(|lit| up(quick_value_face(v.text(), lit))),
+                false => [(blank, 1, 1); 2],
+            })
+            .collect();
         let pointer = up(quick_pointer_face());
         let legend = quick_legend_faces(footer_ink(false)).map(|f| {
             let (tex, w, _) = up(f);
@@ -1086,7 +1142,7 @@ mod screen {
         QuickMenuFaces {
             labels,
             pointer,
-            values: Vec::new(),
+            values,
             legend,
             legend_light: legend,
             descriptions: [(blank, 1, 1); 2],
