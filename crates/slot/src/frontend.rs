@@ -1257,6 +1257,22 @@ impl Frontend {
         }
     }
 
+    fn upload_game(&mut self, compositor: &mut Compositor) {
+        if let Some([r, g, b]) = self.session.app().blank_panel() {
+            self.picture_is(Picture::Blank, compositor);
+            let px = (slot_gfx::SRC_W * slot_gfx::SRC_H) as usize;
+            compositor.upload_game(&[b, g, r, 0xff].repeat(px));
+        } else if let Some(frame) = (!crate::ds_view::seated(&self.session))
+            .then(|| self.session.frame())
+            .flatten()
+        {
+            let launch = self.session.launches();
+            self.picture_is(Picture::Game(launch, frame.cut()), compositor);
+            compositor.upload_game(&frame);
+            crate::latency::taken();
+        }
+    }
+
     fn prepare(&mut self, compositor: &mut Compositor) -> bool {
         compositor.set_blue_light(self.session.app().blue_light());
         compositor.set_dim(self.session.app().dim());
@@ -1273,23 +1289,21 @@ impl Frontend {
         compositor.set_game_layout(self.session.app().game_layout());
         compositor.set_placeholder_bezel(self.session.app().placeholder_bezel());
         self.grab_link_shot(compositor);
+        // The game's frame goes up before the screen is cleared: the CRT glow and frame blending
+        // draw it into framebuffers of their own, and a tiled GPU that turns to another
+        // framebuffer after the clear writes the cleared screen out and reads it back in.
+        // While labels are being cached the frame waits, as it always has.
+        let uploaded = self.rebuild.is_none();
+        if uploaded {
+            self.upload_game(compositor);
+        }
         compositor.begin_frame();
         self.sync_grounds(compositor);
         if self.draw_rebuild(compositor) {
             return false;
         }
-        if let Some([r, g, b]) = self.session.app().blank_panel() {
-            self.picture_is(Picture::Blank, compositor);
-            let px = (slot_gfx::SRC_W * slot_gfx::SRC_H) as usize;
-            compositor.upload_game(&[b, g, r, 0xff].repeat(px));
-        } else if let Some(frame) = (!crate::ds_view::seated(&self.session))
-            .then(|| self.session.frame())
-            .flatten()
-        {
-            let launch = self.session.launches();
-            self.picture_is(Picture::Game(launch, frame.cut()), compositor);
-            compositor.upload_game(&frame);
-            crate::latency::taken();
+        if !uploaded {
+            self.upload_game(compositor);
         }
         self.cart_faces.sync(self.session.app_mut(), compositor);
         sync_clock(self.session.app_mut(), compositor, &mut self.clocks);
