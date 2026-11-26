@@ -192,6 +192,7 @@ impl Compositor {
 
     pub fn update_texture(&mut self, id: TexId, w: u32, h: u32, rgba: &[u8]) {
         self.sprites.update_texture(id, w, h, rgba);
+        self.game.forget_glow();
     }
 
     pub fn grade(&self) -> crate::grade::ColorGrade {

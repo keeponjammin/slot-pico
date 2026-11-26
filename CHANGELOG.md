@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- PICO-8's CRT shader now shows on fake-08 too, so every PICO-8 cart gets the same scanlines, glow and colours whichever core plays it.
+
 ## [1.16.0.2]
 
 - PICO-8 has a CRT shader of its own: a soft scanline on every row, a glow around bright pixels and richer colours. Pick CRT under Settings → Screen → PICO-8 → Shader. For now it shows on your own copy of PICO-8; carts on fake-08 play without it.

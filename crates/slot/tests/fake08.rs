@@ -30,6 +30,16 @@ fn open(root: &Path) -> Option<Box<dyn RetroCore>> {
         eprintln!("no fake-08 on this host at {}, skipping", path.display());
         return None;
     }
+    // `task core:fake08` builds it for the device, so on any other host `vendor/` can hold a
+    // fake-08 that will not load here. slot would then play the mock test pattern instead,
+    // and every test would fail on the mock's frame rate rather than on fake-08.
+    if let Err(e) = slot_retro::LibretroCore::open(&path) {
+        eprintln!(
+            "the fake-08 at {} does not load on this host ({e}), skipping",
+            path.display()
+        );
+        return None;
+    }
     Some(slot::core::open_core_for_palette(
         root,
         Core::Fake08,

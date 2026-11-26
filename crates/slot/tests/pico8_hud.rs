@@ -170,7 +170,7 @@ fn the_shared_file_is_laid_out_as_the_shim_reads_it() {
     shared.set_crt(true);
     let bytes = std::fs::read(&path).unwrap();
     assert_eq!(word(&bytes, layout::W_SHADER), layout::SHADER_CRT);
-    assert!(layout::W_SHADER * 4 + 4 <= layout::HEADER);
+    const { assert!(layout::W_SHADER * 4 + 4 <= layout::HEADER) };
     drop(shared);
     assert!(!path.exists(), "the file outlived the runner");
 }

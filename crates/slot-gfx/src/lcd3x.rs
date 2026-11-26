@@ -18,6 +18,8 @@ pub enum ScreenEffect {
     Simpletex,
     Shimmerless,
     LcdGrid,
+    /// PICO-8's CRT look: scanlines, a glow around bright pixels and livelier colours.
+    Crt,
 }
 
 impl ScreenEffect {
