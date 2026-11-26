@@ -166,6 +166,11 @@ fn the_shared_file_is_laid_out_as_the_shim_reads_it() {
     );
     shared.hide();
     assert_eq!(word(&std::fs::read(&path).unwrap(), layout::W_SHOWN), 0);
+    assert_eq!(word(&bytes, layout::W_SHADER), layout::SHADER_OFF);
+    shared.set_crt(true);
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(word(&bytes, layout::W_SHADER), layout::SHADER_CRT);
+    assert!(layout::W_SHADER * 4 + 4 <= layout::HEADER);
     drop(shared);
     assert!(!path.exists(), "the file outlived the runner");
 }

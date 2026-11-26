@@ -573,6 +573,8 @@ pub enum Shader {
     Dot,
     Simpletex,
     Shimmerless,
+    /// PICO-8's own: scanlines, a glow around bright pixels and livelier colours.
+    Crt,
 }
 
 impl Shader {
@@ -593,7 +595,7 @@ impl Shader {
     ];
     /// PICO-8 draws on no LCD of its own: its pixels stay sharp, gridded, or smoothed when
     /// they are not scaled by a whole number.
-    pub const PICO8: [Shader; 3] = [Shader::Off, Shader::Grid, Shader::Shimmerless];
+    pub const PICO8: [Shader; 4] = [Shader::Off, Shader::Grid, Shader::Shimmerless, Shader::Crt];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -603,6 +605,7 @@ impl Shader {
             Shader::Dot => "dot",
             Shader::Simpletex => "simpletex",
             Shader::Shimmerless => "shimmerless",
+            Shader::Crt => "crt",
         }
     }
 
@@ -614,6 +617,7 @@ impl Shader {
             Shader::Dot,
             Shader::Simpletex,
             Shader::Shimmerless,
+            Shader::Crt,
         ]
         .into_iter()
         .find(|s| s.name() == name)

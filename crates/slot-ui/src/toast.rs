@@ -28,6 +28,7 @@ pub enum Toast {
     ShaderDot,
     ShaderSimpletex,
     ShaderShimmerless,
+    ShaderCrt,
     CardUnwritable,
     CardRepair,
     CardRepairCharge,
@@ -45,7 +46,7 @@ pub enum Toast {
 }
 
 impl Toast {
-    const FIXED: [Toast; 32] = [
+    const FIXED: [Toast; 33] = [
         Toast::StateSaved,
         Toast::StateLoaded,
         Toast::GameReset,
@@ -66,6 +67,7 @@ impl Toast {
         Toast::ShaderDot,
         Toast::ShaderSimpletex,
         Toast::ShaderShimmerless,
+        Toast::ShaderCrt,
         Toast::CardUnwritable,
         Toast::CardRepair,
         Toast::CardRepairCharge,
@@ -165,6 +167,7 @@ impl Toast {
             Toast::ShaderDot => "Shader: Dot",
             Toast::ShaderSimpletex => "Shader: Simpletex",
             Toast::ShaderShimmerless => "Shader: Shimmerless",
+            Toast::ShaderCrt => "Shader: CRT",
             Toast::CardUnwritable => "Can't write to SD card",
             Toast::CardRepair | Toast::CardRepairCharge => "Can't write to SD card",
             Toast::CardRepaired => "SD card repaired",
