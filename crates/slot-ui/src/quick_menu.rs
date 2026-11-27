@@ -151,10 +151,12 @@ pub enum QuickRow {
     Pico8Scale,
     /// The shader row of the menu over the owner's PICO-8, which has no settings pages of its own.
     Pico8PlayShader,
+    /// The core PICO-8 carts play on when none was picked for the cart itself.
+    Pico8Core,
 }
 
 impl QuickRow {
-    pub const ALL: [QuickRow; 139 + cfg!(feature = "nds") as usize] = [
+    pub const ALL: [QuickRow; 140 +cfg!(feature = "nds") as usize] = [
         QuickRow::FastForward,
         QuickRow::FastForwardSound,
         QuickRow::Screen,
@@ -296,6 +298,7 @@ impl QuickRow {
         QuickRow::Pico8Shader,
         QuickRow::Pico8Scale,
         QuickRow::Pico8PlayShader,
+        QuickRow::Pico8Core,
     ];
 
     pub const MAIN: [QuickRow; 6] = [
@@ -465,7 +468,7 @@ impl QuickRow {
     /// as it has none of the Game Boy's screen to imitate.
     pub const SCREEN_PICO8: [QuickRow; 2] = [QuickRow::Pico8Shader, QuickRow::Pico8Scale];
 
-    pub const GAME: [QuickRow; 7] = [
+    pub const GAME: [QuickRow; 8] = [
         QuickRow::FastForward,
         QuickRow::FastForwardSound,
         QuickRow::Rewind,
@@ -473,6 +476,7 @@ impl QuickRow {
         QuickRow::LeftStick,
         QuickRow::ResumeInsert,
         QuickRow::ResumePowerOn,
+        QuickRow::Pico8Core,
     ];
 
     pub const PLAY: [QuickRow; 10] = [
@@ -579,7 +583,8 @@ impl QuickRow {
             | QuickRow::Rumble
             | QuickRow::LeftStick
             | QuickRow::ResumeInsert
-            | QuickRow::ResumePowerOn => &QuickRow::GAME,
+            | QuickRow::ResumePowerOn
+            | QuickRow::Pico8Core => &QuickRow::GAME,
             QuickRow::Wallpaper
             | QuickRow::WallpaperTint
             | QuickRow::Theme
@@ -752,6 +757,7 @@ impl QuickRow {
             QuickRow::Game => "Gameplay",
             QuickRow::ResumeInsert => "Resume on Insert",
             QuickRow::ResumePowerOn => "Resume on Power On",
+            QuickRow::Pico8Core => "PICO-8 Core",
             QuickRow::Rewind => "Rewind",
             QuickRow::GbPalette => "Palette",
             QuickRow::Theme => "Theme",
@@ -1047,10 +1053,12 @@ pub enum QuickValue {
     Both,
     Icon,
     Percentage,
+    Fake08,
+    Pico8,
 }
 
 impl QuickValue {
-    pub const ALL: [QuickValue; 58] = [
+    pub const ALL: [QuickValue; 60] = [
         QuickValue::Speed1_5,
         QuickValue::Speed2,
         QuickValue::Speed3,
@@ -1109,6 +1117,8 @@ impl QuickValue {
         QuickValue::Both,
         QuickValue::Icon,
         QuickValue::Percentage,
+        QuickValue::Fake08,
+        QuickValue::Pico8,
     ];
 
     pub const LEVELS: [QuickValue; 16] = [
@@ -1203,6 +1213,8 @@ impl QuickValue {
             QuickValue::Ghosting => "Ghosting",
             QuickValue::Https => "HTTPS",
             QuickValue::Http => "HTTP",
+            QuickValue::Fake08 => "fake-08",
+            QuickValue::Pico8 => "PICO-8",
         }
     }
 

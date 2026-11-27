@@ -620,7 +620,8 @@ impl Session {
         else {
             return;
         };
-        let own = slot_store::core_for_platform(&self.root, stem, platform, self.app.gb_core());
+        let default = self.app.default_core(platform);
+        let own = slot_store::core_for_platform(&self.root, stem, platform, default);
         let own = crate::pico8::usable(&self.root, own);
         let core = self
             .app

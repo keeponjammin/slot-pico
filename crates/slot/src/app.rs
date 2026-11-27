@@ -1522,7 +1522,8 @@ impl App {
         let (Some(root), Some(platform)) = (&self.root, platform) else {
             return;
         };
-        let core = slot_store::core_for_platform(root, stem, platform, self.state.gb_core);
+        let default = self.default_core(platform);
+        let core = slot_store::core_for_platform(root, stem, platform, default);
         let core = crate::pico8::usable(root, core);
         let ring = StateRing::new(root, platform, core, stem);
         match ring.retire_resume(&format_stamp(self.wall_secs())) {
@@ -2752,8 +2753,9 @@ impl App {
     pub fn in_game_hidden(&self) -> Vec<QuickRow> {
         let no_bezel = self.playing_platform().hardware() == Platform::Gba && !self.framed_panel();
         // The menu over the owner's PICO-8 shows its shader here; slot's own menu has it under
-        // Settings > Screen.
-        let mut hidden = vec![QuickRow::Pico8PlayShader];
+        // Settings > Screen. The default PICO-8 core is for carts yet to go in, so it waits for
+        // the shelf's settings.
+        let mut hidden = vec![QuickRow::Pico8PlayShader, QuickRow::Pico8Core];
         if !self.palette_live {
             hidden.push(QuickRow::Palette);
         }
@@ -2982,6 +2984,10 @@ impl App {
             QuickRow::ResumeInsert => Some(QuickValue::flag(self.state.resume_insert)),
             QuickRow::ResumePowerOn => Some(QuickValue::flag(self.state.resume_power_on)),
             QuickRow::Rewind => Some(QuickValue::flag(self.state.rewind)),
+            QuickRow::Pico8Core => Some(match self.state.pico8_core {
+                Core::Pico8 => QuickValue::Pico8,
+                _ => QuickValue::Fake08,
+            }),
             QuickRow::Recents => Some(if self.state.show_recents {
                 QuickValue::Show
             } else {
@@ -3861,7 +3867,7 @@ impl App {
         }
         // Without PICO-8 carts on the card, slot's settings stay as they are without PICO-8.
         if !self.carts().any(|c| c.platform == Platform::Pico8) {
-            hidden.push(QuickRow::ScreenPico8);
+            hidden.extend([QuickRow::ScreenPico8, QuickRow::Pico8Core]);
         }
         for (row, platform) in [
             (QuickRow::GbaOverlay, Platform::Gba),
@@ -4830,7 +4836,8 @@ impl App {
             return;
         };
         let (stem, platform) = (cart.stem.clone(), cart.platform);
-        let own = slot_store::core_for_platform(&root, &stem, platform, self.gb_core());
+        let default = self.default_core(platform);
+        let own = slot_store::core_for_platform(&root, &stem, platform, default);
         if own == Core::Gpsp {
             return;
         }
@@ -5597,7 +5604,8 @@ impl App {
             return;
         };
         let (stem, platform) = (cart.stem.clone(), cart.platform);
-        let own = slot_store::core_for_platform(&root, &stem, platform, self.gb_core());
+        let default = self.default_core(platform);
+        let own = slot_store::core_for_platform(&root, &stem, platform, default);
         let (_, serial) = self.link_mode(&stem);
         let moved = own != self.core
             || (own == Core::Gpsp && self.link_loaded.is_some_and(|loaded| loaded != serial))
@@ -6797,6 +6805,7 @@ impl App {
             | QuickRow::ResumeInsert
             | QuickRow::ResumePowerOn
             | QuickRow::Rewind
+            | QuickRow::Pico8Core
             | QuickRow::FastForward
             | QuickRow::FastForwardSound
             | QuickRow::GbaColourCorrection
@@ -7037,6 +7046,21 @@ impl App {
             self.persist();
             return;
         }
+        if row == QuickRow::Pico8Core {
+            let to = match self.state.pico8_core {
+                Core::Pico8 => Core::Fake08,
+                _ => Core::Pico8,
+            };
+            // The owner's own PICO-8 can only be the default while it is on the card.
+            let owned = self.root.as_deref().is_some_and(crate::pico8::installed);
+            if to == Core::Pico8 && !owned {
+                self.refuse();
+                return;
+            }
+            self.state.pico8_core = to;
+            self.persist();
+            return;
+        }
         if row == QuickRow::LidOff {
             let n = LID_OFF_MIN.len();
             let at = LID_OFF_MIN
@@ -7158,6 +7182,7 @@ impl App {
             | QuickRow::ScreenGba
             | QuickRow::ScreenGbc
             | QuickRow::ScreenPico8
+            | QuickRow::Pico8Core
             | QuickRow::ScreenGb
             | QuickRow::GbBezel
             | QuickRow::GbcBezel
@@ -11060,8 +11085,8 @@ impl App {
             return true;
         }
         self.root.as_ref().is_some_and(|root| {
-            let core =
-                slot_store::core_for_platform(root, &cart.stem, cart.platform, self.state.gb_core);
+            let default = self.default_core(cart.platform);
+            let core = slot_store::core_for_platform(root, &cart.stem, cart.platform, default);
             crate::pico8::usable(root, core).runs_outside()
         })
     }
@@ -11368,8 +11393,8 @@ impl App {
         if crate::pico8::is_splore(&cart.rom) {
             return;
         }
-        let seat =
-            slot_store::core_for_platform(&root, &cart.stem, cart.platform, self.state.gb_core);
+        let default = self.default_core(cart.platform);
+        let seat = slot_store::core_for_platform(&root, &cart.stem, cart.platform, default);
         let seat = crate::pico8::usable(&root, seat);
         let now = self.now();
         let mut picker = CorePicker::open(Core::pair(cart.platform), seat, now);
@@ -11671,6 +11696,14 @@ impl App {
 
     pub fn gb_core(&self) -> Core {
         self.state.gb_core
+    }
+
+    /// The core a cart of `platform` plays on when none was picked for the cart itself.
+    pub fn default_core(&self, platform: Platform) -> Core {
+        match platform {
+            Platform::Pico8 => self.state.pico8_core,
+            _ => self.state.gb_core,
+        }
     }
 
     pub fn wifi_is_off(&self) -> bool {

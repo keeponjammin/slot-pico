@@ -175,7 +175,8 @@ fn the_rows_run_in_the_order_the_user_chose() {
             "Rumble",
             "Left Stick as D-Pad",
             "Resume on Insert",
-            "Resume on Power On"
+            "Resume on Power On",
+            "PICO-8 Core"
         ]
     );
     let opens: Vec<QuickRow> = QuickRow::ALL.into_iter().filter(|r| r.opens()).collect();
@@ -327,6 +328,8 @@ fn the_values_read_as_the_menu_prints_them() {
             "Both",
             "Icon",
             "Percentage",
+            "fake-08",
+            "PICO-8",
         ]
     );
     assert_eq!(QuickValue::flag(true), QuickValue::On);
