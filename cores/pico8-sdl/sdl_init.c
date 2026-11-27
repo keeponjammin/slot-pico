@@ -684,12 +684,14 @@ static void overlay(void *renderer)
  * PICO-8 keeps its 128x128 screen in one SDL texture and copies it to the
  * window. With the CRT shader on, the shim draws that texture itself:
  *
- * 1. the bright part of the screen, blurred across and then down, into a
- *    128x128 texture of its own (two small passes, cheap on the Mali);
+ * 1. the glow: the bright part of the screen, blurred a little (near) and
+ *    then a lot (wide), across and down, into 128x128 textures of its own
+ *    (four small passes, cheap on the Mali);
  * 2. the screen, pixel for pixel as PICO-8 drew it, with livelier colours,
- *    one soft dark scanline at the foot of every PICO-8 row, the blur laid
- *    over it as glow (near and wide), and a faint vignette, tinted by slot's
- *    blue light and dim gain.
+ *    one soft dark scanline at the foot of every PICO-8 row, the glow laid
+ *    over it, and a faint vignette, tinted by slot's blue light and dim gain.
+ *    The glow fills the scanlines in where the screen is bright, as the beam
+ *    of a CRT widens on bright rows, and spills out around it as a halo.
  *
  * Everything is drawn where SDL would have drawn the copy, so the HUD and
  * the rest of the shim see the same frames they always did. */
@@ -707,11 +709,11 @@ typedef struct {
 static struct {
 	int ready, failed;
 	GLuint blur, final;           /* programs */
-	GLint blur_tex, blur_step, blur_bright, blur_swap;
+	GLint blur_tex, blur_add, blur_step, blur_sigma, blur_pairs, blur_bright, blur_swap, blur_mix, blur_flip;
 	GLint final_tex, final_glow, final_swap, final_foot, final_gain;
 	GLuint pixel;                /* Grid and Shimmerless */
 	GLint pixel_tex, pixel_swap, pixel_look, pixel_hp, pixel_gain;
-	GLuint fbo[2], tex[2];       /* across, then down */
+	GLuint fbo[4], tex[4];       /* near across, near down, wide across, the glow */
 	void *screen;                /* the SDL texture PICO-8 copies */
 	GLuint screen_gl;            /* its GL name */
 	int swap;                    /* -1 until known: 1 if red and blue are swapped in GL */
@@ -721,7 +723,7 @@ static struct {
 	unsigned long uploads;       /* times PICO-8 changed `screen`'s pixels */
 	int upload_seen;             /* 1 once an upload to `screen` was seen */
 	unsigned long blurred_at;    /* `uploads` when tex[1] was last blurred */
-	int blurred;                 /* 1 while tex[1] holds a blur of `screen` */
+	int blurred;                 /* 1 while tex[3] holds the glow of `screen` */
 	/* The last texture that looked like PICO-8's screen, whichever look it
 	 * was drawn with, and where all of it goes (dst as SDL takes it), so a
 	 * change of look can draw the whole screen again. */
@@ -751,29 +753,65 @@ static const char *crt_vs =
 	"varying vec2 v;\n"
 	"void main() { v = uv; gl_Position = vec4(pos, 0.0, 1.0); }\n";
 
-/* One direction of a 9-tap Gaussian, its taps two PICO-8 pixels apart
- * (sigma 3.2 pixels). In the first pass `bright` keeps only what glows:
- * nothing of dark colours, all of the brightest. */
+/* The glow's blur, and what it weighs. The near glow is the bright part
+ * blurred by NEAR_SIGMA PICO-8 pixels; the wide one is the near one blurred
+ * again by WIDE_SIGMA, five pixels in all. */
+#define NEAR_SIGMA 1.2f
+#define WIDE_SIGMA 4.85f
+#define NEAR_GLOW 0.35f
+#define WIDE_GLOW 0.30f
+
+/* One direction of a Gaussian of `sigma` pixels, `step` being one pixel.
+ * Every pixel within reach counts, so a sharp edge blurs smoothly instead
+ * of leaving copies of itself a few pixels on. With `pairs` 0 it reads
+ * eight pixels each way, one by one, which holds whether or not the texture
+ * is filtered; with `pairs` 1 it reads sixteen, two at a time, between them,
+ * which needs a linearly filtered texture. `bright` keeps only what glows:
+ * nothing of dark colours, all of the brightest. The result is `weigh.x` of
+ * the blur and `weigh.y` of `add`, `add` read upside down when `flip` is 1. */
 static const char *crt_blur_fs =
+	"#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
+	"precision highp float;\n"
+	"#else\n"
 	"precision mediump float;\n"
+	"#endif\n"
 	"uniform sampler2D tex;\n"
+	"uniform sampler2D add;\n"
 	"uniform vec2 step;\n"
+	"uniform float sigma;\n"
+	"uniform float pairs;\n"
 	"uniform float bright;\n"
 	"uniform float swap;\n"
+	"uniform vec2 weigh;\n"
+	"uniform float flip;\n"
 	"varying vec2 v;\n"
 	"vec3 at(float k) {\n"
-	"    vec3 c = texture2D(tex, v + step * k).rgb;\n"
+	"    mediump vec3 c = texture2D(tex, v + step * k).rgb;\n"
 	"    c = mix(c, c.bgr, swap);\n"
-	"    float m = max(c.r, max(c.g, c.b));\n"
+	"    mediump float m = max(c.r, max(c.g, c.b));\n"
 	"    return c * mix(1.0, smoothstep(0.2, 0.85, m), bright);\n"
 	"}\n"
+	"float g(float k) { return exp(-k * k / (2.0 * sigma * sigma)); }\n"
 	"void main() {\n"
-	"    vec3 s = at(0.0) * 0.2466;\n"
-	"    s += (at(-1.0) + at(1.0)) * 0.2006;\n"
-	"    s += (at(-2.0) + at(2.0)) * 0.1081;\n"
-	"    s += (at(-3.0) + at(3.0)) * 0.0386;\n"
-	"    s += (at(-4.0) + at(4.0)) * 0.0091;\n"
-	"    gl_FragColor = vec4(s, 1.0);\n"
+	"    mediump vec3 s = at(0.0);\n"
+	"    float t = 1.0;\n"
+	"    for (int i = 1; i <= 8; i++) {\n"
+	"        float k = float(i);\n"
+	"        float w = g(k);\n"
+	"        float o = k;\n"
+	"        if (pairs > 0.5) {\n"
+	"            float k1 = 2.0 * k - 1.0;\n"
+	"            float w1 = g(k1), w2 = g(2.0 * k);\n"
+	"            w = w1 + w2;\n"
+	"            o = (k1 * w1 + 2.0 * k * w2) / max(w, 1e-6);\n"
+	"        }\n"
+	"        s += (at(o) + at(-o)) * w;\n"
+	"        t += 2.0 * w;\n"
+	"    }\n"
+	"    mediump vec3 c = s / t * weigh.x;\n"
+	"    if (weigh.y > 0.0)\n"
+	"        c += texture2D(add, vec2(v.x, mix(v.y, 1.0 - v.y, flip))).rgb * weigh.y;\n"
+	"    gl_FragColor = vec4(c, 1.0);\n"
 	"}\n";
 
 /* `foot` is how many PICO-8 rows one window pixel spans. */
@@ -793,10 +831,8 @@ static const char *crt_final_fs =
 	"const float GAMMA = 0.85;\n"
 	"const float SATURATION = 1.25;\n"
 	"const float BRIGHT = 1.04;\n"
-	"const float SCAN_DEPTH = 0.22;\n"
+	"const float SCAN_DEPTH = 0.30;\n"
 	"const float SCAN_WIDTH = 0.13;\n"
-	"const float GLOW = 0.50;\n"
-	"const float GLOW_WIDE = 0.45;\n"
 	"const float VIGNETTE = 0.07;\n"
 	/* The dark line sits at the foot of each row, centred on the last
 	 * window row of it when PICO-8 is scaled by a whole number. */
@@ -816,13 +852,9 @@ static const char *crt_final_fs =
 	"    float q = foot * 0.25;\n"
 	"    mediump float s = 0.25 * (scan(p.y - 1.5 * q) + scan(p.y - 0.5 * q)\n"
 	"                    + scan(p.y + 0.5 * q) + scan(p.y + 1.5 * q));\n"
-	"    mediump vec3 near = texture2D(glow, v).rgb;\n"
-	"    vec2 o = vec2(6.0 / SIZE);\n"
-	"    mediump vec3 wide = 0.25 * (texture2D(glow, v + o).rgb + texture2D(glow, v - o).rgb\n"
-	"                      + texture2D(glow, v + vec2(o.x, -o.y)).rgb\n"
-	"                      + texture2D(glow, v + vec2(-o.x, o.y)).rgb);\n"
-	/* The scanlines go over the glow, so it never fills them in. */
-	"    c = clamp(c + near * GLOW + wide * GLOW_WIDE, 0.0, 1.0) * s;\n"
+	/* The glow goes over the scanlines: where the screen is bright it fills
+	 * them in, as a CRT's beam widens on bright rows. */
+	"    c = clamp(c * s + texture2D(glow, v).rgb, 0.0, 1.0);\n"
 	"    vec2 e = v * 2.0 - 1.0;\n"
 	"    c *= 1.0 - VIGNETTE * dot(e, e);\n"
 	"    gl_FragColor = vec4(clamp(c, 0.0, 1.0) * gain, 1.0);\n"
@@ -904,17 +936,22 @@ static int crt_set_up(void)
 	crt.pixel_hp = gl.GetUniformLocation(crt.pixel, "hp");
 	crt.pixel_gain = gl.GetUniformLocation(crt.pixel, "gain");
 	crt.blur_tex = gl.GetUniformLocation(crt.blur, "tex");
+	crt.blur_add = gl.GetUniformLocation(crt.blur, "add");
 	crt.blur_step = gl.GetUniformLocation(crt.blur, "step");
+	crt.blur_sigma = gl.GetUniformLocation(crt.blur, "sigma");
+	crt.blur_pairs = gl.GetUniformLocation(crt.blur, "pairs");
 	crt.blur_bright = gl.GetUniformLocation(crt.blur, "bright");
 	crt.blur_swap = gl.GetUniformLocation(crt.blur, "swap");
+	crt.blur_mix = gl.GetUniformLocation(crt.blur, "weigh");
+	crt.blur_flip = gl.GetUniformLocation(crt.blur, "flip");
 	crt.final_tex = gl.GetUniformLocation(crt.final, "tex");
 	crt.final_glow = gl.GetUniformLocation(crt.final, "glow");
 	crt.final_swap = gl.GetUniformLocation(crt.final, "swap");
 	crt.final_foot = gl.GetUniformLocation(crt.final, "foot");
 	crt.final_gain = gl.GetUniformLocation(crt.final, "gain");
-	gl.GenTextures(2, crt.tex);
-	gl.GenFramebuffers(2, crt.fbo);
-	for (int i = 0; i < 2; i++) {
+	gl.GenTextures(4, crt.tex);
+	gl.GenFramebuffers(4, crt.fbo);
+	for (int i = 0; i < 4; i++) {
 		gl.BindTexture(GL_TEXTURE_2D, crt.tex[i]);
 		gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 		gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -1160,9 +1197,12 @@ static int crt_copy(void *renderer, void *texture, const Rect *src, const Rect *
 	gl.Disable(GL_CULL_FACE);
 	gl.ColorMask(1, 1, 1, 1);
 
-	/* Blur the bright part across into tex[0], then down into tex[1]. Each
-	 * pass draws its top row (t = 0) into the texture's last row, so tex[0]
-	 * is upside down and tex[1], flipped twice, the right way up again.
+	/* The glow, in four passes: the bright part blurred near across into
+	 * tex[0] and down into tex[1]; that blurred wide across into tex[2], and
+	 * down into tex[3] with the near glow added. Each pass draws its top row
+	 * (t = 0) into the texture's last row, so tex[0] and tex[2] are upside
+	 * down, and tex[1] and tex[3] the right way up again: the last pass reads
+	 * tex[1] upside down to match tex[2].
 	 *
 	 * This runs before SDL's queued draws reach the window: the Mali draws a
 	 * frame in tiles, and turning to another framebuffer once the window has
@@ -1178,21 +1218,36 @@ static int crt_copy(void *renderer, void *texture, const Rect *src, const Rect *
 	crt.copies++;
 	float swap = crt.swap < 0 ? (format == SDL_ARGB8888 || format == SDL_XRGB8888) : (float)crt.swap;
 	if (look == SHADER_CRT && (!crt.blurred || !crt.upload_seen || crt.blurred_at != crt.uploads)) {
-		gl.BindFramebuffer(GL_FRAMEBUFFER, crt.fbo[0]);
+		const float px = 1.0f / CRT_SIZE;
+		const struct {
+			GLuint src;
+			float dx, dy, sigma, pairs, bright, swap, blur, add;
+		} passes[4] = {
+			{ crt.screen_gl, px, 0.0f, NEAR_SIGMA, 0.0f, 1.0f, swap, 1.0f, 0.0f },
+			{ crt.tex[0], 0.0f, px, NEAR_SIGMA, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f },
+			{ crt.tex[1], px, 0.0f, WIDE_SIGMA, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f },
+			{ crt.tex[2], 0.0f, px, WIDE_SIGMA, 1.0f, 0.0f, 0.0f, WIDE_GLOW, NEAR_GLOW },
+		};
 		gl.Viewport(0, 0, CRT_SIZE, CRT_SIZE);
 		gl.UseProgram(crt.blur);
 		gl.Uniform1i(crt.blur_tex, 0);
-		gl.BindTexture(GL_TEXTURE_2D, crt.screen_gl);
-		gl.Uniform2f(crt.blur_step, 2.0f / CRT_SIZE, 0.0f);
-		gl.Uniform1f(crt.blur_bright, 1.0f);
-		gl.Uniform1f(crt.blur_swap, swap);
-		quad(-1.0f, -1.0f, 1.0f, 1.0f);
-		gl.BindFramebuffer(GL_FRAMEBUFFER, crt.fbo[1]);
-		gl.BindTexture(GL_TEXTURE_2D, crt.tex[0]);
-		gl.Uniform2f(crt.blur_step, 0.0f, 2.0f / CRT_SIZE);
-		gl.Uniform1f(crt.blur_bright, 0.0f);
-		gl.Uniform1f(crt.blur_swap, 0.0f);
-		quad(-1.0f, -1.0f, 1.0f, 1.0f);
+		gl.Uniform1i(crt.blur_add, 1);
+		gl.Uniform1f(crt.blur_flip, 1.0f);
+		for (int i = 0; i < 4; i++) {
+			/* Never with tex[1] bound while it is drawn into. */
+			gl.ActiveTexture(GL_TEXTURE1);
+			gl.BindTexture(GL_TEXTURE_2D, i == 3 ? crt.tex[1] : 0);
+			gl.ActiveTexture(GL_TEXTURE0);
+			gl.BindFramebuffer(GL_FRAMEBUFFER, crt.fbo[i]);
+			gl.BindTexture(GL_TEXTURE_2D, passes[i].src);
+			gl.Uniform2f(crt.blur_step, passes[i].dx, passes[i].dy);
+			gl.Uniform1f(crt.blur_sigma, passes[i].sigma);
+			gl.Uniform1f(crt.blur_pairs, passes[i].pairs);
+			gl.Uniform1f(crt.blur_bright, passes[i].bright);
+			gl.Uniform1f(crt.blur_swap, passes[i].swap);
+			gl.Uniform2f(crt.blur_mix, passes[i].blur, passes[i].add);
+			quad(-1.0f, -1.0f, 1.0f, 1.0f);
+		}
 		crt.blurred = 1;
 		crt.blurred_at = crt.uploads;
 	}
@@ -1244,7 +1299,7 @@ static int crt_copy(void *renderer, void *texture, const Rect *src, const Rect *
 	gl.Uniform3f(crt.final_gain, (float)hud->gain[0] / GAIN_ONE, (float)hud->gain[1] / GAIN_ONE,
 		     (float)hud->gain[2] / GAIN_ONE);
 	gl.ActiveTexture(GL_TEXTURE1);
-	gl.BindTexture(GL_TEXTURE_2D, crt.tex[1]);
+	gl.BindTexture(GL_TEXTURE_2D, crt.tex[3]);
 	gl.ActiveTexture(GL_TEXTURE0);
 	gl.BindTexture(GL_TEXTURE_2D, crt.screen_gl);
 	quad(fx / (float)win_w * 2.0f - 1.0f, 1.0f - (fy + fh) / (float)win_h * 2.0f,
