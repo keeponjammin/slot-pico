@@ -156,7 +156,7 @@ pub enum QuickRow {
 }
 
 impl QuickRow {
-    pub const ALL: [QuickRow; 140 +cfg!(feature = "nds") as usize] = [
+    pub const ALL: [QuickRow; 140 + cfg!(feature = "nds") as usize] = [
         QuickRow::FastForward,
         QuickRow::FastForwardSound,
         QuickRow::Screen,
