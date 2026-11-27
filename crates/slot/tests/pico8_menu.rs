@@ -115,15 +115,22 @@ fn the_owners_pico8_steps_through_the_shaders_fake08_has() {
     }
     assert_eq!(
         seen,
-        [Shader::Grid, Shader::Shimmerless, Shader::Crt, Shader::Off]
+        [
+            Shader::Grid,
+            Shader::Shimmerless,
+            Shader::Crt,
+            Shader::Glass,
+            Shader::Off
+        ]
     );
-    assert_eq!(next_shader(Shader::Off, false), Shader::Crt);
+    assert_eq!(next_shader(Shader::Off, false), Shader::Glass);
     assert_eq!(next_shader(Shader::Grid, false), Shader::Off);
     for (s, v) in [
         (Shader::Off, QuickValue::Off),
         (Shader::Grid, QuickValue::Grid),
         (Shader::Shimmerless, QuickValue::Shimmerless),
         (Shader::Crt, QuickValue::Crt),
+        (Shader::Glass, QuickValue::Glass),
     ] {
         assert_eq!(shader_value(s), v);
     }

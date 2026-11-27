@@ -20,6 +20,10 @@ pub enum ScreenEffect {
     LcdGrid,
     /// PICO-8's CRT look: scanlines, a glow around bright pixels and livelier colours.
     Crt,
+    /// An unlit Game Boy screen over a warm, grainy backing (slotPlus's Transparent).
+    Transparent,
+    /// PICO-8's pixels floating over a dark board, casting soft shadows onto it.
+    Glass,
 }
 
 impl ScreenEffect {
@@ -44,4 +48,19 @@ pub fn lcd3x_mask() -> [[[f32; 3]; 3]; 3] {
         }
     }
     mask
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ScreenEffect;
+
+    #[test]
+    fn each_effect_has_the_mode_the_game_shader_branches_on() {
+        // GAME_FRAG picks its branch from these numbers, highest first.
+        assert_eq!(ScreenEffect::Crt.mode(), 7.0);
+        assert_eq!(ScreenEffect::Transparent.mode(), 8.0);
+        assert_eq!(ScreenEffect::Glass.mode(), 9.0);
+        assert!(crate::shaders::GAME_FRAG.contains("u_mode > 7.5"));
+        assert!(crate::shaders::GAME_FRAG.contains("u_mode > 8.5"));
+    }
 }

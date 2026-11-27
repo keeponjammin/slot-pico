@@ -229,6 +229,7 @@ pub mod layout {
     pub const SHADER_CRT: u32 = 1;
     pub const SHADER_GRID: u32 = 2;
     pub const SHADER_SHIMMERLESS: u32 = 3;
+    pub const SHADER_GLASS: u32 = 4;
 
     /// The word for `shader`. Any other draws as Off.
     pub fn shader_word(shader: slot_store::Shader) -> u32 {
@@ -236,6 +237,7 @@ pub mod layout {
             slot_store::Shader::Crt => SHADER_CRT,
             slot_store::Shader::Grid => SHADER_GRID,
             slot_store::Shader::Shimmerless => SHADER_SHIMMERLESS,
+            slot_store::Shader::Glass => SHADER_GLASS,
             _ => SHADER_OFF,
         }
     }

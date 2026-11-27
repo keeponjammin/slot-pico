@@ -26,7 +26,7 @@ pub const ROWS: [QuickRow; 5] = [
 
 /// The shaders the owner's PICO-8 is drawn with: the shim draws each of
 /// PICO-8's, as slot's compositor draws them for fake-08.
-pub const SHADERS: [Shader; 4] = Shader::PICO8;
+pub const SHADERS: [Shader; 5] = Shader::PICO8;
 
 /// The shader after `shader`, stepping left or right through `SHADERS`. One
 /// it does not draw counts as Off.
@@ -44,6 +44,7 @@ pub fn next_shader(shader: Shader, right: bool) -> Shader {
 pub fn shader_value(shader: Shader) -> QuickValue {
     match shader {
         Shader::Crt => QuickValue::Crt,
+        Shader::Glass => QuickValue::Glass,
         Shader::Grid => QuickValue::Grid,
         Shader::Shimmerless => QuickValue::Shimmerless,
         _ => QuickValue::Off,

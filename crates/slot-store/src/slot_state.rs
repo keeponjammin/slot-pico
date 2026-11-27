@@ -577,6 +577,12 @@ pub enum Shader {
     Shimmerless,
     /// PICO-8's own: scanlines, a glow around bright pixels and livelier colours.
     Crt,
+    /// An unlit Game Boy screen: light pixels let the backing show through, and dark ones
+    /// cast soft shadows onto it. From slotPlus.
+    Transparent,
+    /// PICO-8's own take on Transparent: black is clear glass over a dark board, and every
+    /// lit pixel floats above it, casting a soft shadow.
+    Glass,
 }
 
 impl Shader {
@@ -588,16 +594,23 @@ impl Shader {
         Shader::Shimmerless,
     ];
     pub const GBA_3_2: [Shader; 4] = [Shader::Off, Shader::Lcd3x, Shader::Grid, Shader::Dot];
-    pub const GB: [Shader; 5] = [
+    pub const GB: [Shader; 6] = [
         Shader::Off,
         Shader::Lcd3x,
         Shader::Grid,
         Shader::Simpletex,
         Shader::Shimmerless,
+        Shader::Transparent,
     ];
     /// PICO-8 draws on no LCD of its own: its pixels stay sharp, gridded, or smoothed when
     /// they are not scaled by a whole number.
-    pub const PICO8: [Shader; 4] = [Shader::Off, Shader::Grid, Shader::Shimmerless, Shader::Crt];
+    pub const PICO8: [Shader; 5] = [
+        Shader::Off,
+        Shader::Grid,
+        Shader::Shimmerless,
+        Shader::Crt,
+        Shader::Glass,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -608,6 +621,8 @@ impl Shader {
             Shader::Simpletex => "simpletex",
             Shader::Shimmerless => "shimmerless",
             Shader::Crt => "crt",
+            Shader::Transparent => "transparent",
+            Shader::Glass => "glass",
         }
     }
 
@@ -620,6 +635,8 @@ impl Shader {
             Shader::Simpletex,
             Shader::Shimmerless,
             Shader::Crt,
+            Shader::Transparent,
+            Shader::Glass,
         ]
         .into_iter()
         .find(|s| s.name() == name)

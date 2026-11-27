@@ -99,12 +99,69 @@ float crt_scan(float y, float foot) {
     d = min(d, 1.0 - d);
     return 1.0 - crt_scan_depth * exp(-(d * d) / (crt_scan_width * crt_scan_width));
 }
+// Transparent (from slotPlus): an unlit Game Boy screen. Light pixels let the screen's
+// backing show through, and the dark pixels above it cast soft shadows onto it.
+const vec3 clear_backing = vec3(0.60, 0.62, 0.50);
+const float clear_see = 0.5;
+const float clear_shadow_px = 2.0;
+const float clear_blur_px = 1.0;
+const float clear_shadow = 0.4;
+float darkness_at(vec2 at) {
+    vec2 lo = u_pic.xy;
+    vec2 hi = u_pic.zw - 0.5 / u_src;
+    return 1.0 - dot(texture2D(u_game, clamp(at, lo, hi)).rgb, luma_coeff);
+}
+// Glass, PICO-8's take on Transparent: its black is clear glass over a dark, grainy board,
+// dark colours are partly see-through, and every lit pixel floats above the board and casts
+// a soft shadow down and to the right onto it, half a PICO-8 pixel away. A thin gap between
+// the pixels shows the board too. cores/pico8-sdl/sdl_init.c draws the same for the owner's
+// PICO-8.
+const vec3 glass_board = vec3(0.13, 0.125, 0.145);
+const float glass_shadow_at = 0.5;
+const float glass_blur = 0.35;
+const float glass_shadow = 0.8;
+const float glass_gap = 0.15;
+float glass_solid(vec3 c) {
+    float l = dot(c, luma_coeff);
+    return smoothstep(0.0, 0.04, l) * (0.7 + 0.3 * smoothstep(0.1, 0.45, l));
+}
+float glass_solid_at(vec2 p) {
+    vec2 lo = u_pic.xy * u_src;
+    vec2 hi = u_pic.zw * u_src - 1.0;
+    return glass_solid(texture2D(u_game, (clamp(floor(p), lo, hi) + 0.5) / u_src).rgb);
+}
 void main() {
     vec2 uv = u_uv.xy + v_uv * u_uv.zw;
     vec2 f = fract(uv * u_src);
     vec3 c = texture2D(u_game, uv).rgb;
     bool inside = all(greaterThanEqual(uv, u_pic.xy)) && all(lessThan(uv, u_pic.zw));
     if (!inside) {
+    } else if (u_mode > 8.5) {
+        float grain = texture2D(u_paper, (floor(gl_FragCoord.xy - u_origin) + 0.5) / u_paper_size).r;
+        vec3 board = glass_board * (0.85 + 0.3 * grain);
+        vec2 s = uv * u_src - glass_shadow_at;
+        float shade = glass_solid_at(s)
+            + glass_solid_at(s + vec2(glass_blur, 0.0)) + glass_solid_at(s - vec2(glass_blur, 0.0))
+            + glass_solid_at(s + vec2(0.0, glass_blur)) + glass_solid_at(s - vec2(0.0, glass_blur));
+        board *= 1.0 - glass_shadow * shade / 5.0;
+        vec2 hp = 0.5 * u_uv.zw * u_src / (u_rect.zw * u_fbo);
+        vec2 edge = (grid_band(f + hp) - grid_band(f - hp)) / (2.0 * hp);
+        c = mix(board, c, glass_solid(c) * (1.0 - glass_gap * max(edge.x, edge.y)));
+    } else if (u_mode > 7.5) {
+        vec2 angle = f * 6.283185307;
+        float yfactor = (16.0 + sin(angle.y)) / 17.0;
+        vec3 xfactors = (4.0 + sin(angle.x + offsets)) / 5.0;
+        vec3 lcd = c * yfactor * xfactors;
+        float grain = texture2D(u_paper, (floor(gl_FragCoord.xy - u_origin) + 0.5) / u_paper_size).r;
+        vec3 backing = clear_backing * (0.9 + 0.2 * grain);
+        vec2 px = u_uv.zw / u_rect.zw;
+        vec2 at = uv - clear_shadow_px * px;
+        vec2 b = clear_blur_px * px;
+        float dark = darkness_at(at)
+            + darkness_at(at + vec2(b.x, 0.0)) + darkness_at(at - vec2(b.x, 0.0))
+            + darkness_at(at + vec2(0.0, b.y)) + darkness_at(at - vec2(0.0, b.y));
+        backing *= 1.0 - clear_shadow * dark / 5.0;
+        c = mix(lcd, backing, clear_see * dot(c, luma_coeff));
     } else if (u_mode > 6.5) {
         // The CRT look, as cores/pico8-sdl/sdl_init.c draws it for the owner's PICO-8: livelier
         // colours, a soft dark line at the foot of every game row (averaged over the screen

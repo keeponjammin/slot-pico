@@ -171,6 +171,8 @@ fn the_shared_file_is_laid_out_as_the_shim_reads_it() {
         (slot_store::Shader::Crt, layout::SHADER_CRT),
         (slot_store::Shader::Grid, layout::SHADER_GRID),
         (slot_store::Shader::Shimmerless, layout::SHADER_SHIMMERLESS),
+        (slot_store::Shader::Glass, layout::SHADER_GLASS),
+        (slot_store::Shader::Transparent, layout::SHADER_OFF),
         (slot_store::Shader::Off, layout::SHADER_OFF),
     ] {
         shared.set_shader(shader);

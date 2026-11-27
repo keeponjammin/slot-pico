@@ -1630,3 +1630,46 @@ fn a_cart_on_fake08_gets_the_crt_look_too() {
     assert_eq!(a.screen_shader(), slot_store::Shader::Crt);
     assert_eq!(a.screen_effect(), slot_gfx::ScreenEffect::Crt);
 }
+
+#[test]
+fn glass_is_pico8s_own_and_transparent_the_game_boys() {
+    use slot_store::Shader;
+    assert!(Shader::PICO8.contains(&Shader::Glass));
+    assert!(!Shader::PICO8.contains(&Shader::Transparent));
+    assert!(Shader::GB.contains(&Shader::Transparent));
+    assert!(!Shader::GB.contains(&Shader::Glass) && !Shader::GBA.contains(&Shader::Glass));
+    assert!(!Shader::GBA.contains(&Shader::Transparent));
+    let d = TempDir::new().unwrap();
+    slot::root::ensure(d.path());
+    let mut state = slot_store::read_slot_state(d.path());
+    state.shader_pico8 = Shader::Glass;
+    state.shader_gb = Shader::Transparent;
+    state.shader_gbc = Shader::Transparent;
+    slot_store::write_slot_state(d.path(), &state).unwrap();
+    let back = slot_store::read_slot_state(d.path());
+    assert_eq!(back.shader_pico8, Shader::Glass);
+    assert_eq!(back.shader_gb, Shader::Transparent);
+    assert_eq!(back.shader_gbc, Shader::Transparent);
+    state.shader_pico8 = Shader::Transparent;
+    state.shader_gb = Shader::Glass;
+    slot_store::write_slot_state(d.path(), &state).unwrap();
+    let back = slot_store::read_slot_state(d.path());
+    assert_ne!(
+        back.shader_pico8,
+        Shader::Transparent,
+        "PICO-8 has no Transparent"
+    );
+    assert_ne!(back.shader_gb, Shader::Glass, "the Game Boy has no Glass");
+}
+
+#[test]
+fn a_cart_on_fake08_gets_glass() {
+    let d = TempDir::new().unwrap();
+    slot::root::ensure(d.path());
+    let mut state = slot_store::read_slot_state(d.path());
+    state.shader_pico8 = slot_store::Shader::Glass;
+    slot_store::write_slot_state(d.path(), &state).unwrap();
+    let (a, _turn) = playing_on_fake08(d.path());
+    assert_eq!(a.screen_shader(), slot_store::Shader::Glass);
+    assert_eq!(a.screen_effect(), slot_gfx::ScreenEffect::Glass);
+}
