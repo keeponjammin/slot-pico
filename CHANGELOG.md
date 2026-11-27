@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [1.16.0.6]
+
 - The menu over your own copy of PICO-8 is laid out like the one over any other game: Resume, Settings and Exit Game. The shader is under Settings → Screen, in the panel along the bottom, and B goes back a page at a time.
 
 ## [1.16.0.5]
