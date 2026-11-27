@@ -20,8 +20,8 @@
  *   slot's own audio does (crates/slot/src/audio/volume.rs).
  * - SDL_RenderCopy: what PICO-8 draws is tinted by slot's blue light and
  *   dim gain, as slot's compositor tints every frame of its own games.
- *   With one of slot's shaders chosen for PICO-8 (CRT, Grid or
- *   Shimmerless), the shim draws PICO-8's screen itself instead, as slot's
+ *   With one of slot's shaders chosen for PICO-8 (CRT, Grid, Shimmerless or
+ *   Glass), the shim draws PICO-8's screen itself instead, as slot's
  *   compositor draws fake-08's (see "the CRT look" below).
  * - SDL_RenderPresent: while slot shows its HUD, the strip it drew is laid
  *   over the top of each frame. PICO-8 only redraws pixels that change, so
@@ -87,6 +87,7 @@ struct hud {
 #define SHADER_CRT 1u
 #define SHADER_GRID 2u
 #define SHADER_SHIMMERLESS 3u
+#define SHADER_GLASS 4u
 
 #define GAIN_ONE 65535u
 
@@ -711,7 +712,7 @@ static struct {
 	GLuint blur, final;           /* programs */
 	GLint blur_tex, blur_add, blur_step, blur_sigma, blur_pairs, blur_bright, blur_swap, blur_mix, blur_flip;
 	GLint final_tex, final_glow, final_swap, final_foot, final_gain;
-	GLuint pixel;                /* Grid and Shimmerless */
+	GLuint pixel;                /* Grid, Shimmerless and Glass */
 	GLint pixel_tex, pixel_swap, pixel_look, pixel_hp, pixel_gain;
 	GLuint fbo[4], tex[4];       /* near across, near down, wide across, the glow */
 	void *screen;                /* the SDL texture PICO-8 copies */
@@ -860,11 +861,14 @@ static const char *crt_final_fs =
 	"    gl_FragColor = vec4(clamp(c, 0.0, 1.0) * gain, 1.0);\n"
 	"}\n";
 
-/* slot's Grid and Shimmerless, as its compositor draws them for fake-08
- * (crates/slot-gfx/src/shaders.rs, GAME_FRAG): `look` 1 is Grid, a dark
- * line around every pixel; 2 is Shimmerless, sharp pixels smoothed only
- * where a window pixel spans two of them. `hp` is half a window pixel, in
- * PICO-8 pixels. */
+/* slot's Grid, Shimmerless and Glass, as its compositor draws them for
+ * fake-08 (crates/slot-gfx/src/shaders.rs, GAME_FRAG): `look` 1 is Grid, a
+ * dark line around every pixel; 2 is Shimmerless, sharp pixels smoothed only
+ * where a window pixel spans two of them; 3 is Glass, black as clear glass
+ * over a dark, grainy board, with every lit pixel floating above it and
+ * casting a soft shadow onto it. `hp` is half a window pixel, in PICO-8
+ * pixels. The compositor takes Glass's grain from its paper texture; here it
+ * is a hash of the window pixel. */
 static const char *pixel_fs =
 	"#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
 	"precision highp float;\n"
@@ -885,10 +889,39 @@ static const char *pixel_fs =
 	"vec2 grid_band(vec2 x) {\n"
 	"    return floor(x) / 3.0 + min(fract(x), vec2(1.0 / 3.0));\n"
 	"}\n"
+	"const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);\n"
+	"const vec3 GLASS_BOARD = vec3(0.13, 0.125, 0.145);\n"
+	"const float GLASS_SHADOW_AT = 0.5;\n"
+	"const float GLASS_BLUR = 0.35;\n"
+	"const float GLASS_SHADOW = 0.8;\n"
+	"const float GLASS_GAP = 0.15;\n"
+	"float solid(vec3 c) {\n"
+	"    float l = dot(c, LUMA);\n"
+	"    return smoothstep(0.0, 0.04, l) * (0.7 + 0.3 * smoothstep(0.1, 0.45, l));\n"
+	"}\n"
+	"float solid_at(vec2 p) {\n"
+	"    return solid(at(clamp(floor(p), 0.0, SIZE - 1.0) + 0.5));\n"
+	"}\n"
+	"float grain(vec2 p) {\n"
+	"    vec3 q = fract(vec3(p.xyx) * 0.1031);\n"
+	"    q += dot(q, q.yzx + 33.33);\n"
+	"    return fract((q.x + q.y) * q.z);\n"
+	"}\n"
 	"void main() {\n"
 	"    vec2 p = v * SIZE;\n"
 	"    vec3 c;\n"
-	"    if (look > 1.5) {\n"
+	"    if (look > 2.5) {\n"
+	"        c = at(floor(p) + 0.5);\n"
+	"        vec3 board = GLASS_BOARD * (0.85 + 0.3 * grain(floor(gl_FragCoord.xy)));\n"
+	"        vec2 s = p - GLASS_SHADOW_AT;\n"
+	"        float shade = solid_at(s)\n"
+	"            + solid_at(s + vec2(GLASS_BLUR, 0.0)) + solid_at(s - vec2(GLASS_BLUR, 0.0))\n"
+	"            + solid_at(s + vec2(0.0, GLASS_BLUR)) + solid_at(s - vec2(0.0, GLASS_BLUR));\n"
+	"        board *= 1.0 - GLASS_SHADOW * shade / 5.0;\n"
+	"        vec2 f = fract(p);\n"
+	"        vec2 edge = (grid_band(f + hp) - grid_band(f - hp)) / (2.0 * hp);\n"
+	"        c = mix(board, c, solid(c) * (1.0 - GLASS_GAP * max(edge.x, edge.y)));\n"
+	"    } else if (look > 1.5) {\n"
 	"        vec2 b = floor(p + hp);\n"
 	"        vec2 t = clamp((p + hp - b) / (2.0 * hp), 0.0, 1.0);\n"
 	"        vec2 a0 = clamp(b - 0.5, vec2(0.5), vec2(SIZE - 0.5));\n"
@@ -1278,7 +1311,7 @@ static int crt_copy(void *renderer, void *texture, const Rect *src, const Rect *
 		gl.UseProgram(crt.pixel);
 		gl.Uniform1i(crt.pixel_tex, 0);
 		gl.Uniform1f(crt.pixel_swap, swap);
-		gl.Uniform1f(crt.pixel_look, look == SHADER_SHIMMERLESS ? 2.0f : 1.0f);
+		gl.Uniform1f(crt.pixel_look, look == SHADER_GLASS ? 3.0f : look == SHADER_SHIMMERLESS ? 2.0f : 1.0f);
 		gl.Uniform2f(crt.pixel_hp, 0.5f * CRT_SIZE / fw, 0.5f * CRT_SIZE / fh);
 		gl.Uniform3f(crt.pixel_gain, (float)hud->gain[0] / GAIN_ONE, (float)hud->gain[1] / GAIN_ONE,
 			     (float)hud->gain[2] / GAIN_ONE);
@@ -1339,7 +1372,7 @@ void SDL_UnlockTexture(void *texture)
 /* Whether the shim draws PICO-8's screen with `look` itself. */
 static int drawn_by_shim(uint32_t look)
 {
-	return look == SHADER_CRT || look == SHADER_GRID || look == SHADER_SHIMMERLESS;
+	return look == SHADER_CRT || look == SHADER_GRID || look == SHADER_SHIMMERLESS || look == SHADER_GLASS;
 }
 
 /* What SDL_RenderCopy does without the CRT look: tinted by slot's blue

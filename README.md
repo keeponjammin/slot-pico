@@ -34,8 +34,9 @@ Releases follow slot's version with a number added: 1.16.0.7, for example, is sl
 - **Splore.** With your own PICO-8 on the card, a Splore cart shows up on the shelf. It opens PICO-8's browser for the
   [Lexaloffle BBS](https://www.lexaloffle.com/bbs/?cat=7) over the Wi-Fi you saved in slot. Every cart you favourite
   there lands on your shelf when you leave, where it also plays on fake-08.
-- **PICO-8's shaders.** Grid, Shimmerless and CRT, on fake-08 and on your own PICO-8 alike. CRT gives every row a soft
-  scanline and bright pixels a glow. Pick one under Settings → Screen → PICO-8, or from the menu while you play.
+- **PICO-8's shaders.** Grid, Shimmerless, CRT and Glass, on fake-08 and on your own PICO-8 alike. CRT gives every row
+  a soft scanline and bright pixels a glow. Glass turns black into clear glass over a dark board, with every pixel
+  floating above it and casting a soft shadow. Pick one under Settings → Screen → PICO-8, or from the menu while you play.
 - **One set of saves.** Game saves, like high scores, live in `Saves/PICO8/cdata/` for both cores, so a game you
   started on fake-08 carries on on PICO-8 and back.
 

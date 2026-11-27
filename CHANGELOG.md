@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## [1.16.0.8]
+
+- A new Glass shader for PICO-8, on fake-08 and on your own PICO-8 alike. PICO-8's black turns into clear glass over a dark, grainy board, and every pixel floats above it, casting a soft shadow down and to the right. Pick it under Settings → Screen → PICO-8 → Shader, or from the menu while you play.
+- The Transparent shader from [slotPlus](https://github.com/nelynes/slotPlus) for Game Boy and Game Boy Color games: LCD3x with the screen left unlit, so light pixels let a warm, grainy backing show through and dark pixels cast soft shadows onto it. It is last in the Shader row on the Game Boy and Game Boy Color pages. The idea comes from Matt Akins' Pixel Transparency shader for RetroArch.
+
 ## [1.16.0.7]
 
 - If you own PICO-8, you can make it the core your PICO-8 carts play on: Settings → Gameplay → PICO-8 Core. Carts you favourite in Splore then go on your own PICO-8 instead of fake-08. A core you pick for one cart on its board still wins. Without PICO-8 on the card the row stays on fake-08.

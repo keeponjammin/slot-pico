@@ -5116,6 +5116,9 @@ impl App {
             Shader::Shimmerless => ScreenEffect::Shimmerless,
             // The owner's PICO-8 draws it in its SDL shim, with the same look.
             Shader::Crt => ScreenEffect::Crt,
+            Shader::Transparent => ScreenEffect::Transparent,
+            // The owner's PICO-8 draws it in its SDL shim too.
+            Shader::Glass => ScreenEffect::Glass,
         }
     }
 
@@ -7293,6 +7296,8 @@ impl App {
             Shader::Simpletex => Toast::ShaderSimpletex,
             Shader::Shimmerless => Toast::ShaderShimmerless,
             Shader::Crt => Toast::ShaderCrt,
+            Shader::Transparent => Toast::ShaderTransparent,
+            Shader::Glass => Toast::ShaderGlass,
         };
         self.persist();
         self.hud.toast(said, self.now());
@@ -16598,6 +16603,8 @@ fn shader_value(shader: Shader) -> QuickValue {
         Shader::Simpletex => QuickValue::Simpletex,
         Shader::Shimmerless => QuickValue::Shimmerless,
         Shader::Crt => QuickValue::Crt,
+        Shader::Transparent => QuickValue::Transparent,
+        Shader::Glass => QuickValue::Glass,
     }
 }
 
