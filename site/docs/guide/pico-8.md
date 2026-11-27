@@ -49,7 +49,7 @@ When a cart runs on your own PICO-8, the screen goes dark for a moment while slo
 
 When PICO-8 quits, slot comes back on the same cart.
 
-The in-game menu has two rows for PICO-8: Resume, or Exit Game to go back to slot. <kbd>B</kbd> or another tap of <kbd>MENU</kbd> also resumes.
+The in-game menu over PICO-8 is laid out like the one over any other game: Resume, Settings and Exit Game to go back to slot. The shader is under Settings → Screen. <kbd>B</kbd> goes back a page at a time, and another tap of <kbd>MENU</kbd> resumes.
 
 The other things slot does for its own games, like save states, rewind and bezels, are not there in your own PICO-8. Games that save, save on their own.
 
