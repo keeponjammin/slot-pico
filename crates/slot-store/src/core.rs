@@ -116,7 +116,9 @@ pub fn read_selected_cores(root: &Path) -> HashMap<String, Core> {
         .collect()
 }
 
-pub fn core_for_platform(root: &Path, stem: &str, platform: Platform, gb_core: Core) -> Core {
+/// The core a cart plays on: the one picked for it, else `default` where the owner gets to
+/// choose one for the platform (Game Boy and PICO-8), else slot's own choice.
+pub fn core_for_platform(root: &Path, stem: &str, platform: Platform, default: Core) -> Core {
     let mut lines = crate::ini::read(root, SELECTED_CORE_FILE);
     lines
         .remove(&core_key(platform, stem))
@@ -125,7 +127,7 @@ pub fn core_for_platform(root: &Path, stem: &str, platform: Platform, gb_core: C
         .and_then(Core::parse)
         .filter(|core| core.runs(platform))
         .unwrap_or_else(|| match platform {
-            Platform::Gb | Platform::Gbc if gb_core.runs(platform) => gb_core,
+            Platform::Gb | Platform::Gbc | Platform::Pico8 if default.runs(platform) => default,
             #[cfg(feature = "nds")]
             Platform::Nds => Core::Dsperate,
             Platform::Pico8 => Core::Fake08,

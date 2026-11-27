@@ -480,6 +480,8 @@ pub struct SlotState {
     pub wifi_off: bool,
     pub nickname: String,
     pub gb_core: Core,
+    /// The core PICO-8 carts play on unless one was picked for the cart itself.
+    pub pico8_core: Core,
     pub left_stick_dpad: bool,
     pub lid_off_min: Option<u8>,
     pub bezel_gba: BezelPick,
@@ -678,6 +680,7 @@ impl Default for SlotState {
             wifi_off: false,
             nickname: String::new(),
             gb_core: Core::Gambatte,
+            pico8_core: Core::Fake08,
             left_stick_dpad: true,
             lid_off_min: None,
             bezel_gba: BezelPick::Ags102,
@@ -813,6 +816,7 @@ pub fn write_slot_state(root: &Path, s: &SlotState) -> std::io::Result<()> {
         text.push_str(&format!("nickname={}\n", s.nickname));
     }
     text.push_str(&format!("gb_core={}\n", s.gb_core.as_str()));
+    text.push_str(&format!("pico8_core={}\n", s.pico8_core.as_str()));
     text.push_str(&format!("left_stick_dpad={}\n", s.left_stick_dpad as u8));
     text.push_str(&format!("resume_insert={}\n", s.resume_insert as u8));
     text.push_str(&format!("resume_power_on={}\n", s.resume_power_on as u8));
@@ -923,6 +927,7 @@ fn parse(text: &str) -> Option<SlotState> {
     let mut wifi_off = None;
     let mut nickname = None;
     let mut gb_core = None;
+    let mut pico8_core = None;
     let mut left_stick_dpad = None;
     let mut lid_off_min = None;
     let mut bezel_gba = None;
@@ -993,6 +998,7 @@ fn parse(text: &str) -> Option<SlotState> {
             "wifi_off" => wifi_off = flag(value),
             "nickname" => nickname = Some(value.to_string()),
             "gb_core" => gb_core = Core::parse(value).filter(|c| c.runs(Platform::Gb)),
+            "pico8_core" => pico8_core = Core::parse(value).filter(|c| c.runs(Platform::Pico8)),
             "left_stick_dpad" => left_stick_dpad = flag(value),
             "lid_off_min" => lid_off_min = value.parse().ok().filter(|m| LID_OFF_MIN.contains(m)),
             "bezel_gba" => bezel_gba = Some(BezelPick::parse(value)),
@@ -1084,6 +1090,7 @@ fn parse(text: &str) -> Option<SlotState> {
         wifi_off: wifi_off.unwrap_or(fallback.wifi_off),
         nickname: nickname.unwrap_or_default(),
         gb_core: gb_core.unwrap_or(Core::Mgba),
+        pico8_core: pico8_core.unwrap_or(fallback.pico8_core),
         left_stick_dpad: left_stick_dpad.unwrap_or(fallback.left_stick_dpad),
         lid_off_min,
         bezel_gba: bezel_gba.unwrap_or(fallback.bezel_gba),
