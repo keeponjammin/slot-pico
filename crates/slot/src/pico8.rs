@@ -238,8 +238,9 @@ pub fn bbs_url(id: &str) -> Option<String> {
     ))
 }
 
-/// What became of asking the BBS for a cart.
+/// What became of asking the BBS for a cart, or for what it knows of one.
 pub enum Fetched {
+    /// The answer: the cart, or the BBS's lines about it.
     Cart(Vec<u8>),
     /// The BBS answered, without the cart.
     Missing,
@@ -451,7 +452,25 @@ pub fn fetch_bbs(agent: &ureq::Agent, id: &str) -> Fetched {
     let Some(url) = bbs_url(id) else {
         return Fetched::Missing;
     };
-    let response = match agent.get(&url).call() {
+    fetch_url(agent, &url, BBS_CART_LIMIT)
+}
+
+/// Asks the BBS which cart a name stands for now, as PICO-8 does for
+/// `load("#name")`: its answer has the cart's id, revision and all, on a
+/// `lid:` line.
+pub fn fetch_bbs_info(agent: &ureq::Agent, name: &str) -> Fetched {
+    if !is_bbs_id(name) {
+        return Fetched::Missing;
+    }
+    let url = format!("https://www.lexaloffle.com/bbs/cpost_lister3.php?nfo=1&lid={name}");
+    fetch_url(agent, &url, BBS_INFO_LIMIT)
+}
+
+/// The BBS's answer about a cart is a few short lines.
+const BBS_INFO_LIMIT: u64 = 4 << 10;
+
+fn fetch_url(agent: &ureq::Agent, url: &str, limit: u64) -> Fetched {
+    let response = match agent.get(url).call() {
         Ok(r) => r,
         Err(ureq::Error::StatusCode(code)) => {
             eprintln!("slot: pico8: {url}: {code}");
@@ -466,7 +485,7 @@ pub fn fetch_bbs(agent: &ureq::Agent, id: &str) -> Fetched {
     match response
         .into_body()
         .into_with_config()
-        .limit(BBS_CART_LIMIT)
+        .limit(limit)
         .reader()
         .read_to_end(&mut bytes)
     {
@@ -889,6 +908,329 @@ pub fn label_from_png(bytes: &[u8]) -> Option<Vec<u8>> {
         }
     }
     Some(out)
+}
+
+/// A cart's ROM: graphics, map, sound and, from `CODE_AT`, its Lua code.
+const ROM_SIZE: usize = 0x8000;
+const CODE_AT: usize = 0x4300;
+
+/// The ROM a `.p8.png` hides in its picture: a byte a pixel, in the two low
+/// bits of its alpha, red, green and blue.
+fn png_rom(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).ok()?;
+    if (info.width, info.height) != PNG_SIZE || info.color_type != png::ColorType::Rgba {
+        return None;
+    }
+    let mut rom = Vec::with_capacity(ROM_SIZE);
+    for y in 0..info.height as usize {
+        let row = buf.get(y * info.line_size..y * info.line_size + info.width as usize * 4)?;
+        for px in row.chunks_exact(4) {
+            if rom.len() == ROM_SIZE {
+                return Some(rom);
+            }
+            let [r, g, b, a] = [px[0] & 3, px[1] & 3, px[2] & 3, px[3] & 3];
+            rom.push(a << 6 | r << 4 | g << 2 | b);
+        }
+    }
+    (rom.len() == ROM_SIZE).then_some(rom)
+}
+
+/// The Lua code of a cart: the `__lua__` part of a `.p8`, or what a `.p8.png`
+/// carries, compressed the old way, the new (PXA) way or not at all.
+pub fn cart_code(bytes: &[u8]) -> Option<String> {
+    if !bytes.starts_with(b"\x89PNG") {
+        let text = String::from_utf8_lossy(bytes);
+        let start = text.find("\n__lua__")? + "\n__lua__".len();
+        let rest = &text[start..];
+        let end = rest.find("\n__").unwrap_or(rest.len());
+        return Some(rest[..end].to_string());
+    }
+    let rom = png_rom(bytes)?;
+    let code = &rom[CODE_AT..];
+    let out = if code.starts_with(b"\0pxa") {
+        pxa_decompress(code)
+    } else if code.starts_with(b":c:\0") {
+        legacy_decompress(code)
+    } else {
+        let end = code.iter().position(|&b| b == 0).unwrap_or(code.len());
+        code[..end].to_vec()
+    };
+    Some(String::from_utf8_lossy(&out).into_owned())
+}
+
+/// PICO-8's compression since 0.2.0: literals through a move-to-front table
+/// and back-references, in a bit stream read low bit first. As zepto8 and
+/// fake-08 read it.
+fn pxa_decompress(input: &[u8]) -> Vec<u8> {
+    struct Bits<'a> {
+        input: &'a [u8],
+        pos: usize,
+        end: usize,
+    }
+    impl Bits<'_> {
+        fn take(&mut self, count: usize) -> usize {
+            let mut n = 0;
+            for i in 0..count {
+                if self.done() {
+                    break;
+                }
+                n |= (self.input[self.pos >> 3] as usize >> (self.pos & 7) & 1) << i;
+                self.pos += 1;
+            }
+            n
+        }
+        fn done(&self) -> bool {
+            self.pos >= self.end
+        }
+    }
+    let at = |i: usize| input.get(i).copied().unwrap_or(0) as usize;
+    let length = at(4) << 8 | at(5);
+    let compressed = (at(6) << 8 | at(7)).min(input.len());
+    let mut reader = Bits {
+        input,
+        pos: 8 * 8,
+        end: compressed * 8,
+    };
+    let mut mtf: Vec<u8> = (0..=255).collect();
+    let mut out: Vec<u8> = Vec::with_capacity(length);
+    while out.len() < length {
+        if reader.take(1) == 1 {
+            let mut nbits = 4;
+            while reader.take(1) == 1 && nbits < 16 {
+                nbits += 1;
+            }
+            let n = reader.take(nbits) + (1 << nbits) - 16;
+            let Some(&ch) = mtf.get(n) else { break };
+            mtf.remove(n);
+            mtf.insert(0, ch);
+            if ch == 0 {
+                break;
+            }
+            out.push(ch);
+        } else {
+            // The second bit only follows a first 1.
+            let nbits = match reader.take(1) {
+                1 if reader.take(1) == 1 => 5,
+                1 => 10,
+                _ => 15,
+            };
+            let offset = reader.take(nbits) + 1;
+            if nbits == 10 && offset == 1 {
+                loop {
+                    let ch = reader.take(8) as u8;
+                    if ch == 0 {
+                        break;
+                    }
+                    out.push(ch);
+                }
+            } else {
+                let mut len = 3;
+                loop {
+                    let n = reader.take(3);
+                    len += n;
+                    if n != 7 {
+                        break;
+                    }
+                }
+                if offset > out.len() {
+                    break;
+                }
+                for _ in 0..len {
+                    out.push(out[out.len() - offset]);
+                }
+            }
+        }
+        if reader.done() {
+            break;
+        }
+    }
+    out.truncate(length);
+    out
+}
+
+/// PICO-8's compression before 0.2.0, as the PICO-8 wiki and fake-08 read it.
+fn legacy_decompress(input: &[u8]) -> Vec<u8> {
+    const LUT: &[u8] = b"\n 0123456789abcdefghijklmnopqrstuvwxyz!#%(){}[]<>+=/*:;.,~_";
+    let length = (input.get(4).copied().unwrap_or(0) as usize) << 8
+        | input.get(5).copied().unwrap_or(0) as usize;
+    let mut out: Vec<u8> = Vec::with_capacity(length);
+    let mut i = 8;
+    while i < input.len() && out.len() < length {
+        match input[i] {
+            0 => {
+                i += 1;
+                out.extend(input.get(i));
+            }
+            b if b < 0x3c => out.push(LUT[b as usize - 1]),
+            b => {
+                let next = input.get(i + 1).copied().unwrap_or(0) as usize;
+                let offset = (b as usize - 0x3c) * 16 + (next & 0xf);
+                let len = (next >> 4) + 2;
+                i += 1;
+                if offset == 0 || offset > out.len() {
+                    i += 1;
+                    continue;
+                }
+                let start = out.len() - offset;
+                for j in 0..len {
+                    out.push(out[start + j]);
+                }
+            }
+        }
+        i += 1;
+    }
+    out.truncate(length);
+    out
+}
+
+/// The BBS carts a cart's code loads by name, as in `load("#level_2")` or
+/// `load"#level_2-3"`: how a game too big for one cart goes on in another.
+/// Names the code puts together as it runs cannot be read here.
+pub fn bbs_loads(code: &str) -> Vec<String> {
+    let bytes = code.as_bytes();
+    let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut out: Vec<String> = Vec::new();
+    let mut from = 0;
+    while let Some(found) = code[from..].find("load") {
+        let at = from + found;
+        from = at + 4;
+        if at > 0 && ident(bytes[at - 1]) {
+            continue;
+        }
+        let mut i = at + 4;
+        let skip = |i: &mut usize| {
+            while *i < bytes.len() && bytes[*i].is_ascii_whitespace() {
+                *i += 1;
+            }
+        };
+        skip(&mut i);
+        if bytes.get(i) == Some(&b'(') {
+            i += 1;
+            skip(&mut i);
+        }
+        let Some(&quote @ (b'"' | b'\'')) = bytes.get(i) else {
+            continue;
+        };
+        if bytes.get(i + 1) != Some(&b'#') {
+            continue;
+        }
+        let start = i + 2;
+        let Some(len) = bytes[start..].iter().position(|&b| b == quote) else {
+            continue;
+        };
+        let name = &code[start..start + len];
+        if is_bbs_id(name) && !out.iter().any(|n| n == name) {
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
+/// Where Splore keeps the BBS carts PICO-8 has run, as `<id>.p8.png`, with a
+/// `temp-<name>.nfo` for each name PICO-8 looked up.
+fn bbs_carts_dir(home: &Path) -> PathBuf {
+    home.join("bbs").join("carts")
+}
+
+/// The cart id the BBS gave for `name`, from its `lid:` line.
+fn info_id(info: &str) -> Option<String> {
+    info.lines()
+        .find_map(|l| l.trim().strip_prefix("lid:"))
+        .map(|id| id.trim().to_string())
+        .filter(|id| is_bbs_id(id))
+}
+
+/// The copy of a loaded cart Splore's BBS folder already has, by the id the
+/// BBS gave for its name earlier.
+fn cached_load(home: &Path, name: &str) -> Option<PathBuf> {
+    let dir = bbs_carts_dir(home);
+    let info = std::fs::read_to_string(dir.join(format!("temp-{name}.nfo"))).ok()?;
+    Some(dir.join(format!("{}.p8.png", info_id(&info)?))).filter(|p| p.is_file())
+}
+
+/// Most carts a game is spread over, beyond its first; a game loading more
+/// than this is taken for one gone wrong.
+const LOADED_MAX: usize = 64;
+
+/// Puts in Splore's BBS folder every cart the carts on the PICO-8 shelf load
+/// from the BBS, and the ones those load, as PICO-8 would on the way: so a
+/// game over several carts plays on from the shelf without the network, on
+/// fake-08 too. `info` asks the BBS which id a name stands for and `fetch`
+/// for the cart. Returns how many carts it put there.
+pub fn fetch_loaded_carts(
+    root: &Path,
+    mut info: impl FnMut(&str) -> Fetched,
+    mut fetch: impl FnMut(&str) -> Fetched,
+) -> usize {
+    let home = home_dir(root);
+    let dir = bbs_carts_dir(&home);
+    let Ok(entries) = std::fs::read_dir(carts_dir(root)) else {
+        return 0;
+    };
+    let mut queue: Vec<String> = Vec::new();
+    for path in entries.filter_map(|e| e.ok().map(|e| e.path())) {
+        if !is_cart(&path) || is_splore(&path) {
+            continue;
+        }
+        let code = std::fs::read(&path).ok().and_then(|b| cart_code(&b));
+        queue.extend(code.as_deref().map(bbs_loads).unwrap_or_default());
+    }
+    let mut seen: Vec<String> = Vec::new();
+    let mut added = 0;
+    while let Some(name) = queue.pop() {
+        if seen.contains(&name) {
+            continue;
+        }
+        if seen.len() == LOADED_MAX {
+            eprintln!("slot: pico8: more than {LOADED_MAX} carts loaded, left the rest");
+            break;
+        }
+        seen.push(name.clone());
+        let bytes = match cached_load(&home, &name) {
+            Some(path) => std::fs::read(path).ok(),
+            None => match info(&name) {
+                Fetched::Cart(text) => {
+                    let text = String::from_utf8_lossy(&text).into_owned();
+                    match info_id(&text).map(|id| (fetch(&id), id)) {
+                        Some((Fetched::Cart(bytes), id))
+                            if bytes.starts_with(b"\x89PNG\r\n\x1a\n") =>
+                        {
+                            let _ = std::fs::create_dir_all(&dir);
+                            let cart = dir.join(format!("{id}.p8.png"));
+                            let nfo = dir.join(format!("temp-{name}.nfo"));
+                            match slot_store::atomic_write(&cart, &bytes)
+                                .and_then(|()| slot_store::atomic_write(&nfo, text.as_bytes()))
+                            {
+                                Ok(()) => {
+                                    eprintln!("slot: pico8: fetched {id}, loaded as #{name}");
+                                    added += 1;
+                                }
+                                Err(e) => eprintln!("slot: pico8: {}: {e}", cart.display()),
+                            }
+                            Some(bytes)
+                        }
+                        Some((Fetched::Offline, _)) => break,
+                        _ => {
+                            eprintln!("slot: pico8: #{name} is not on the BBS");
+                            None
+                        }
+                    }
+                }
+                Fetched::Missing => {
+                    eprintln!("slot: pico8: #{name} is not on the BBS");
+                    None
+                }
+                Fetched::Offline => break,
+            },
+        };
+        let code = bytes.as_deref().and_then(cart_code);
+        queue.extend(code.as_deref().map(bbs_loads).unwrap_or_default());
+    }
+    added
 }
 
 /// Writes a label PNG for every cart in `Games/PICO8` that has none in
@@ -1517,6 +1859,16 @@ mod runner {
             let added = shelve_favourites(root, |id| fetch_bbs(&agent, id));
             if added > 0 {
                 eprintln!("slot: pico8: {added} favourite(s) put on the shelf");
+            }
+            // Games over several carts need the others on the card to play
+            // on from the shelf, where there is no network.
+            let loaded = fetch_loaded_carts(
+                root,
+                |name| fetch_bbs_info(&agent, name),
+                |id| fetch_bbs(&agent, id),
+            );
+            if loaded > 0 {
+                eprintln!("slot: pico8: {loaded} cart(s) the shelf's games load fetched");
             }
         }
         wifi.down(root);

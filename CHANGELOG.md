@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- A cart you unfavourite in Splore comes off the PICO-8 shelf again when you leave Splore, with its label. Its saves stay, and favouriting it again puts it back. Carts you put in `Games/PICO8/` yourself stay where they are.
+- PICO-8 games spread over several carts, which go on with `load("#…")`, now play from the shelf: when you leave Splore, slot fetches the carts a shelf game loads into Splore's BBS folder, and fake-08 loads them from there.
+
 ## [1.16.0.6]
 
 - The menu over your own copy of PICO-8 is laid out like the one over any other game: Resume, Settings and Exit Game. The shader is under Settings → Screen, in the panel along the bottom, and B goes back a page at a time.

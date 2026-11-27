@@ -1,0 +1,114 @@
+--- a/source/vm.cpp
++++ b/source/vm.cpp
+@@ -10,6 +10,9 @@
+ #include <iostream>
+ #include <iomanip>
+ #include <ctime>
++#include <cctype>
++#include <cstdio>
++#include <fstream>
+ 
+ #include "vm.h"
+ #include "graphics.h"
+@@ -38,6 +41,71 @@
+ static const char DefaultCartName[] = "__FAKE08-DEFAULT.p8";
+ static const char SettingsCartName[] = "__FAKE08-SETTINGS.p8";
+ 
++// slot: whether a file is there to read.
++static bool slotFileExists(const std::string& path) {
++    FILE* f = fopen(path.c_str(), "rb");
++    if (!f) {
++        return false;
++    }
++    fclose(f);
++    return true;
++}
++
++// slot: a "#name" cart the running cart loads, from Splore's copy of the BBS in the save
++// directory, when it is not beside the running cart. PICO-8 keeps each cart it fetched there
++// as bbs/carts/<id>.p8.png, and the id the BBS gave for a name in bbs/carts/temp-<name>.nfo,
++// on a "lid:" line. Returns "" when there is no such copy.
++static std::string slotBbsCart(const std::string& saveDir, const std::string& cartDir,
++        const std::string& name) {
++    for (char c : name) {
++        if (!isalnum((unsigned char)c) && c != '_' && c != '-') {
++            return "";
++        }
++    }
++    if (name.empty() || saveDir.empty()) {
++        return "";
++    }
++    if (cartDir.length() > 0) {
++        std::string beside = cartDir + "/" + name;
++        if (slotFileExists(beside + ".p8") || slotFileExists(beside + ".p8.png")) {
++            return "";
++        }
++    }
++    std::string dir = saveDir;
++    if (dir[dir.length() - 1] != '/') {
++        dir += "/";
++    }
++    dir += "bbs/carts/";
++    // A name with its revision is a file of its own.
++    if (slotFileExists(dir + name + ".p8.png")) {
++        return dir + name + ".p8.png";
++    }
++    std::ifstream nfo(dir + "temp-" + name + ".nfo");
++    std::string line;
++    while (std::getline(nfo, line)) {
++        if (line.compare(0, 4, "lid:") != 0) {
++            continue;
++        }
++        std::string id = line.substr(4);
++        while (!id.empty() && isspace((unsigned char)id[id.length() - 1])) {
++            id.erase(id.length() - 1);
++        }
++        while (!id.empty() && isspace((unsigned char)id[0])) {
++            id.erase(0, 1);
++        }
++        for (char c : id) {
++            if (!isalnum((unsigned char)c) && c != '_' && c != '-') {
++                return "";
++            }
++        }
++        if (!id.empty() && slotFileExists(dir + id + ".p8.png")) {
++            return dir + id + ".p8.png";
++        }
++        return "";
++    }
++    return "";
++}
++
+ bool _initializeLuaState(lua_State* luaState) {
+     // initialize Lua interpreter
+     
+@@ -460,6 +528,18 @@
+         }
+     }
+ 
++    // slot: fake-08 cannot fetch a "#name" cart from the BBS, but slot puts the carts a game
++    // loads in Splore's copy of the BBS, as PICO-8 does. The cart directory stays the running
++    // cart's, so a cart loaded from there finds the next one the same way.
++    if (filename.length() > 1 && filename[0] == '#') {
++        std::string cached = slotBbsCart(_host->logFilePrefix(), _host->getCartDirectory(),
++            filename.substr(1));
++        if (cached.length() > 0) {
++            Logger_Write("Loading %s from %s\n", filename.c_str(), cached.c_str());
++            filename = cached;
++        }
++    }
++
+     Logger_Write("Calling Cart Constructor\n");
+     auto cartDir = _host->getCartDirectory();
+     Cart *cart = new Cart(filename, cartDir);
+--- a/platform/libretro/libretrohost.cpp
++++ b/platform/libretro/libretrohost.cpp
+@@ -135,3 +135,8 @@
+         mkdir(cartdatadir.c_str(), 0777);
+     }
+ }
++
++// slot: the save directory the frontend gave, where Splore's copy of the BBS is too.
++const char* Host::logFilePrefix() {
++    return _logFilePrefix.c_str();
++}
