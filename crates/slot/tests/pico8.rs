@@ -1179,6 +1179,258 @@ fn splore_favourites_go_on_the_shelf_once() {
 }
 
 #[test]
+fn a_cart_unfavourited_in_splore_comes_off_the_shelf() {
+    let d = TempDir::new().unwrap();
+    let kalikan = png(160, 205, |_, _| [0xff, 0, 0x4d, 0xff]);
+    let buns = png(160, 205, |_, _| [0, 0xff, 0x4d, 0xff]);
+    bbs_cart(d.path(), "carts", "kalikan_menu-6", &kalikan);
+    bbs_cart(d.path(), "5", "56576", &buns);
+    favourites(d.path(), FAVOURITES);
+    pico8::shelve_favourites(d.path(), |_| pico8::Fetched::Missing);
+    write_cart(d.path(), "mine.p8", b"pico-8 cartridge");
+    pico8::write_labels(d.path());
+    slot_store::write_selected_core(d.path(), Platform::Pico8, "Kalikan", Core::Pico8).unwrap();
+    let dir = pico8::carts_dir(d.path());
+    let label = d.path().join("Labels/PICO8/Kalikan.png");
+    assert!(dir.join("Kalikan.p8.png").is_file());
+    assert!(label.is_file());
+
+    // Kalikan is unfavourited; the buns stay.
+    favourites(d.path(), &FAVOURITES.lines().skip(1).collect::<Vec<_>>().join("\n"));
+    pico8::shelve_favourites(d.path(), |_| pico8::Fetched::Missing);
+    assert!(!dir.join("Kalikan.p8.png").exists(), "the unfavourited cart stayed");
+    assert!(!label.exists(), "its label stayed");
+    assert_eq!(
+        slot_store::read_selected_cores(d.path()).get("PICO8/Kalikan"),
+        None,
+        "its core stayed picked"
+    );
+    assert!(dir.join("Mai-chan's Sweet Buns.p8.png").is_file());
+    assert!(dir.join("mine.p8").is_file(), "a cart the owner put there went");
+
+    // Favourited again, it comes back.
+    favourites(d.path(), FAVOURITES);
+    pico8::shelve_favourites(d.path(), |_| pico8::Fetched::Missing);
+    assert!(dir.join("Kalikan.p8.png").is_file(), "a favourite again stayed off");
+}
+
+#[test]
+fn a_favourite_shelved_before_slot_kept_its_file_still_comes_off() {
+    let d = TempDir::new().unwrap();
+    let cart = png(160, 205, |_, _| [0xff, 0, 0x4d, 0xff]);
+    bbs_cart(d.path(), "carts", "pico_backrooms-1", &cart);
+    write_cart(d.path(), "Pico_backrooms.p8.png", &cart);
+    write_cart(d.path(), "Other.p8.png", b"\x89PNG\r\n\x1a\nother");
+    std::fs::create_dir_all(d.path().join("Config")).unwrap();
+    std::fs::write(
+        d.path().join("Config/pico8_favourites.txt"),
+        "pico_backrooms-1\n",
+    )
+    .unwrap();
+    favourites(d.path(), "");
+    pico8::shelve_favourites(d.path(), |_| panic!("asked the BBS"));
+    let dir = pico8::carts_dir(d.path());
+    assert!(!dir.join("Pico_backrooms.p8.png").exists());
+    assert!(dir.join("Other.p8.png").is_file());
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("Config/pico8_favourites.txt")).unwrap(),
+        ""
+    );
+}
+
+#[test]
+fn a_favourites_list_slot_cannot_read_takes_nothing_off() {
+    let d = TempDir::new().unwrap();
+    let cart = png(160, 205, |_, _| [0xff, 0, 0x4d, 0xff]);
+    bbs_cart(d.path(), "carts", "kalikan_menu-6", &cart);
+    favourites(d.path(), FAVOURITES);
+    pico8::shelve_favourites(d.path(), |_| pico8::Fetched::Missing);
+    let kalikan = pico8::carts_dir(d.path()).join("Kalikan.p8.png");
+    assert!(kalikan.is_file());
+    favourites(d.path(), "a list in some new format\n");
+    pico8::shelve_favourites(d.path(), |_| pico8::Fetched::Missing);
+    assert!(kalikan.is_file(), "an unreadable list took a cart off");
+    std::fs::remove_file(pico8::home_dir(d.path()).join("favourites.txt")).unwrap();
+    pico8::shelve_favourites(d.path(), |_| pico8::Fetched::Missing);
+    assert!(kalikan.is_file(), "a missing list took a cart off");
+}
+
+/// A `.p8.png` hiding `code` at 0x4300 of its ROM, in the two low bits of each
+/// pixel's channels, as PICO-8 saves one.
+fn png_cart(code: &[u8]) -> Vec<u8> {
+    let mut rom = vec![0u8; 0x8000];
+    rom[0x4300..0x4300 + code.len()].copy_from_slice(code);
+    png(160, 205, |x, y| {
+        let b = rom.get((y * 160 + x) as usize).copied().unwrap_or(0);
+        let low = |v: u8, shift: u8| 0xa0 | (v >> shift & 3);
+        [low(b, 4), low(b, 2), low(b, 0), 0xfc | (b >> 6)]
+    })
+}
+
+/// A PXA stream as PICO-8 writes one, from literals and back-references.
+enum Pxa<'a> {
+    Text(&'a [u8]),
+    Back { offset: usize, len: usize },
+}
+
+fn pxa(parts: &[Pxa]) -> Vec<u8> {
+    let mut bits: Vec<bool> = Vec::new();
+    let put = |bits: &mut Vec<bool>, v: usize, n: usize| {
+        for i in 0..n {
+            bits.push(v >> i & 1 == 1);
+        }
+    };
+    let mut mtf: Vec<u8> = (0..=255).collect();
+    let mut length = 0;
+    for part in parts {
+        match part {
+            Pxa::Text(text) => {
+                for &ch in *text {
+                    let n = mtf.iter().position(|&c| c == ch).unwrap();
+                    mtf.remove(n);
+                    mtf.insert(0, ch);
+                    let mut nbits = 4;
+                    while n >= (1 << (nbits + 1)) - 16 {
+                        nbits += 1;
+                    }
+                    put(&mut bits, 1, 1);
+                    for _ in 4..nbits {
+                        put(&mut bits, 1, 1);
+                    }
+                    put(&mut bits, 0, 1);
+                    put(&mut bits, n + 16 - (1 << nbits), nbits);
+                    length += 1;
+                }
+            }
+            Pxa::Back { offset, len } => {
+                put(&mut bits, 0, 1);
+                put(&mut bits, 0, 1); // 15-bit offset
+                put(&mut bits, offset - 1, 15);
+                let mut left = len - 3;
+                while left >= 7 {
+                    put(&mut bits, 7, 3);
+                    left -= 7;
+                }
+                put(&mut bits, left, 3);
+                length += len;
+            }
+        }
+    }
+    let mut body = vec![0u8; bits.len().div_ceil(8)];
+    for (i, bit) in bits.iter().enumerate() {
+        body[i / 8] |= (*bit as u8) << (i % 8);
+    }
+    let total = 8 + body.len();
+    let mut out = b"\0pxa".to_vec();
+    out.extend_from_slice(&[(length >> 8) as u8, length as u8, (total >> 8) as u8, total as u8]);
+    out.extend(body);
+    out
+}
+
+#[test]
+fn a_carts_code_is_read_however_it_is_stored() {
+    let text = concat!(
+        "pico-8 cartridge // http://www.pico-8.com\nversion 41\n",
+        "__lua__\nload(\"#two\")\n__gfx__\n00\n"
+    );
+    assert_eq!(
+        pico8::cart_code(text.as_bytes()).as_deref(),
+        Some("\nload(\"#two\")")
+    );
+    assert_eq!(
+        pico8::cart_code(&png_cart(b"print(1)\0junk")).as_deref(),
+        Some("print(1)")
+    );
+    let packed = pxa(&[
+        Pxa::Text(b"load(\"#lvl\")\n"),
+        Pxa::Back { offset: 13, len: 13 },
+        Pxa::Text(b"-- the end"),
+    ]);
+    assert_eq!(
+        pico8::cart_code(&png_cart(&packed)).as_deref(),
+        Some("load(\"#lvl\")\nload(\"#lvl\")\n-- the end")
+    );
+    // The old compression: `pr` from the table, then a copy of both.
+    let legacy = [b':', b'c', b':', 0, 0, 4, 0, 0, 0x1c, 0x1e, 0x3c, 0x02];
+    assert_eq!(pico8::cart_code(&png_cart(&legacy)).as_deref(), Some("prpr"));
+    assert_eq!(pico8::cart_code(b"\x89PNG not a picture"), None);
+}
+
+#[test]
+fn the_bbs_carts_a_cart_loads_are_found_in_its_code() {
+    let code = r##"
+        load("#level_2")
+        load '#level_3-1'
+        load"#level_2"
+        load ( "#boss" , "back to menu")
+        reload(0x2000, 0x2000, 0x1000, "#notthis")
+        load("local.p8")
+        load("#"..name)
+        overload("#nope")
+    "##;
+    assert_eq!(pico8::bbs_loads(code), ["level_2", "level_3-1", "boss"]);
+}
+
+#[test]
+fn carts_a_shelf_game_loads_are_fetched_into_splores_folder() {
+    let d = TempDir::new().unwrap();
+    write_cart(
+        d.path(),
+        "Big Game.p8",
+        b"pico-8 cartridge\n__lua__\nload(\"#big_game_2\")\n",
+    );
+    let second = png_cart(b"load(\"#big_game_3\")");
+    let third = png_cart(b"print('the end')");
+    let mut asked = Vec::new();
+    let added = pico8::fetch_loaded_carts(
+        d.path(),
+        |name| {
+            asked.push(name.to_string());
+            pico8::Fetched::Cart(format!("lid:{name}-4\nmid:{name}\n").into_bytes())
+        },
+        |id| match id {
+            "big_game_2-4" => pico8::Fetched::Cart(second.clone()),
+            "big_game_3-4" => pico8::Fetched::Cart(third.clone()),
+            _ => pico8::Fetched::Missing,
+        },
+    );
+    assert_eq!(added, 2);
+    assert_eq!(asked, ["big_game_2", "big_game_3"]);
+    let bbs = pico8::home_dir(d.path()).join("bbs/carts");
+    assert_eq!(std::fs::read(bbs.join("big_game_2-4.p8.png")).unwrap(), second);
+    assert!(bbs.join("big_game_3-4.p8.png").is_file());
+    assert!(std::fs::read_to_string(bbs.join("temp-big_game_2.nfo"))
+        .unwrap()
+        .starts_with("lid:big_game_2-4"));
+    let shelf = slot_store::scan(d.path()).unwrap();
+    assert_eq!(shelf.len(), 1, "a loaded cart went on the shelf");
+
+    let again = pico8::fetch_loaded_carts(
+        d.path(),
+        |_| panic!("asked the BBS for a cart it had"),
+        |_| panic!("fetched a cart it had"),
+    );
+    assert_eq!(again, 0);
+}
+
+#[test]
+fn offline_no_loaded_cart_is_fetched_and_none_is_half_written() {
+    let d = TempDir::new().unwrap();
+    write_cart(d.path(), "Big Game.p8", b"pico-8 cartridge\n__lua__\nload(\"#a\") load(\"#b\")\n");
+    let mut asked = 0;
+    let added = pico8::fetch_loaded_carts(
+        d.path(),
+        |_| {
+            asked += 1;
+            pico8::Fetched::Offline
+        },
+        |_| panic!("fetched while offline"),
+    );
+    assert_eq!((added, asked), (0, 1));
+    assert!(!pico8::home_dir(d.path()).join("bbs/carts").exists());
+}
+
+#[test]
 fn offline_the_bbs_is_asked_once_and_the_rest_wait() {
     let d = TempDir::new().unwrap();
     favourites(
