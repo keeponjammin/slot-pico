@@ -11,13 +11,17 @@ use slot_input::{Action, Btn};
 use slot_store::Shader;
 use slot_ui::{QuickRow, QuickValue};
 
-/// The rows PICO-8 gets. slot keeps no save states for it, its screenshots
-/// are PICO-8's own, and of its settings only the shader changes while it
-/// plays: the shim draws slot's shaders, and nothing else of the screen.
-pub const ROWS: [QuickRow; 3] = [
+/// The rows PICO-8 gets, laid out as slot's menu over any game: Resume,
+/// Settings and Exit Game, Settings opening Screen, and Screen the panel
+/// along the bottom. slot keeps no save states for it, its screenshots are
+/// PICO-8's own, and of its settings only the shader changes while it plays:
+/// the shim draws slot's shaders, and nothing else of the screen.
+pub const ROWS: [QuickRow; 5] = [
     QuickRow::Resume,
-    QuickRow::Pico8PlayShader,
+    QuickRow::Settings,
     QuickRow::ExitGame,
+    QuickRow::PlayScreen,
+    QuickRow::Shader,
 ];
 
 /// The shaders the owner's PICO-8 is drawn with: the shim draws each of
@@ -46,10 +50,12 @@ pub fn shader_value(shader: Shader) -> QuickValue {
     }
 }
 
-/// The rest of the in-game page, hidden.
+/// The rest of the in-game pages, hidden.
 pub fn hidden() -> Vec<QuickRow> {
     QuickRow::PLAY
         .into_iter()
+        .chain(QuickRow::SETTINGS)
+        .chain(QuickRow::PLAY_SCREEN)
         .filter(|r| !ROWS.contains(r))
         .collect()
 }
@@ -84,6 +90,8 @@ impl Menu {
         self.row.is_some()
     }
 
+    /// Moves as slot's menu over a game does: A opens a row's page, B goes
+    /// back up (and resumes from the top page), left and right change a value.
     pub fn act(&mut self, action: Action) -> Step {
         let hidden = hidden();
         match (self.row, action) {
@@ -96,24 +104,36 @@ impl Menu {
                 Step::Open
             }
             (None, _) => Step::Nothing,
-            (Some(_), Action::QuickMenu | Action::GbaDown(Btn::B)) => {
+            (Some(_), Action::QuickMenu) => {
                 self.row = None;
                 Step::Resume
             }
+            (Some(row), Action::GbaDown(Btn::B)) => match row.parent_in_game() {
+                Some(up) => self.move_to(up),
+                None => {
+                    self.row = None;
+                    Step::Resume
+                }
+            },
             (Some(row), Action::GbaDown(Btn::Up)) => self.move_to(row.up(&hidden)),
             (Some(row), Action::GbaDown(Btn::Down)) => self.move_to(row.down(&hidden)),
-            (Some(QuickRow::Pico8PlayShader), Action::GbaDown(Btn::Left)) => Step::Shader(false),
-            (Some(QuickRow::Pico8PlayShader), Action::GbaDown(Btn::Right | Btn::A)) => {
-                Step::Shader(true)
+            (Some(QuickRow::Shader), Action::GbaDown(Btn::Left)) => Step::Shader(false),
+            (Some(QuickRow::Shader), Action::GbaDown(Btn::Right)) => Step::Shader(true),
+            (Some(QuickRow::Resume), Action::GbaDown(Btn::A)) => {
+                self.row = None;
+                Step::Resume
             }
             (Some(QuickRow::ExitGame), Action::GbaDown(Btn::A)) => {
                 self.row = None;
                 Step::Quit
             }
-            (Some(_), Action::GbaDown(Btn::A)) => {
-                self.row = None;
-                Step::Resume
-            }
+            (Some(row), Action::GbaDown(Btn::A)) => match row.child() {
+                Some(child) => {
+                    let first = child.shown(&hidden).first().copied();
+                    self.move_to(first.unwrap_or(child))
+                }
+                None => Step::Nothing,
+            },
             (Some(_), _) => Step::Nothing,
         }
     }
@@ -974,7 +994,7 @@ mod screen {
             }
             if let Some((row, hidden)) = menu {
                 let mut values = [None; QuickRow::ALL.len()];
-                values[QuickRow::Pico8PlayShader.index()] = Some(self.shader);
+                values[QuickRow::Shader.index()] = Some(self.shader);
                 QuickMenu {
                     row,
                     hidden,
@@ -1039,9 +1059,17 @@ mod screen {
                     }
                     .draw(&mut out);
                 }
-                let [_, _, open, resume, ..] = self.kept.faces.legend;
+                // B resumes from the top page and goes back from the others;
+                // A opens a row, or left and right change its value.
+                let [back, change, open, resume, ..] = self.kept.faces.legend;
+                let row = menu.map_or(QuickRow::Resume, |(row, _)| row);
+                let left = match row.page() == QuickRow::PLAY {
+                    true => resume,
+                    false => back,
+                };
+                let right = if row.opens() { open } else { change };
                 let y = canvas.h - MOUTH_H;
-                for (face, right) in [(resume, false), (open, true)] {
+                for (face, right) in [(left, false), (right, true)] {
                     let seen = face.1.saturating_sub(HINT_EDGE) as f32;
                     let x = if right {
                         (canvas.w - seen).round()
@@ -1115,14 +1143,20 @@ mod screen {
         }
     }
 
-    /// The menu's faces: real labels for the in-game page, which sets the
-    /// menu's width, and a blank for every other row it never shows.
+    /// The menu's faces: real labels for the in-game pages, whose widest
+    /// label sets each page's width as in slot, and a blank for every other
+    /// row it never shows.
     fn upload_faces(c: &mut Compositor) -> QuickMenuFaces {
         let blank = c.create_texture(1, 1, &[0, 0, 0, 0]);
         let mut up = |f: UndoFace| (c.create_texture(f.w, f.h, &f.rgba), f.w, f.h);
+        let pages = [
+            &QuickRow::PLAY[..],
+            &QuickRow::SETTINGS,
+            &QuickRow::PLAY_SCREEN,
+        ];
         let labels = QuickRow::ALL
             .iter()
-            .map(|row| match QuickRow::PLAY.contains(row) {
+            .map(|row| match pages.iter().any(|p| p.contains(row)) {
                 true => [false, true].map(|lit| up(quick_label_face(*row, lit))),
                 false => [(blank, 1, 1); 2],
             })

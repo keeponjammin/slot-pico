@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The menu over your own copy of PICO-8 is laid out like the one over any other game: Resume, Settings and Exit Game. The shader is under Settings → Screen, in the panel along the bottom, and B goes back a page at a time.
+
 ## [1.16.0.5]
 
 - CRT's glow is a smooth halo now. It used to leave faint copies of bright edges a few pixels away, like a bad video cable. Bright pixels also fill their scanlines in, as a CRT's beam widens where the picture is bright.

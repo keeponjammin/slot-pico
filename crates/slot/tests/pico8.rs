@@ -1378,11 +1378,3 @@ fn a_cart_on_fake08_gets_the_crt_look_too() {
     assert_eq!(a.screen_shader(), slot_store::Shader::Crt);
     assert_eq!(a.screen_effect(), slot_gfx::ScreenEffect::Crt);
 }
-
-#[test]
-fn slots_own_menus_never_show_the_shader_row_of_the_owners_pico8() {
-    let d = TempDir::new().unwrap();
-    let (a, _turn) = playing_on_fake08(d.path());
-    assert!(a.in_game_hidden().contains(&slot_ui::QuickRow::Pico8PlayShader));
-    assert!(a.hidden_rows().contains(&slot_ui::QuickRow::Pico8PlayShader));
-}
