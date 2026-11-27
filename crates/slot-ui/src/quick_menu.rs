@@ -149,12 +149,10 @@ pub enum QuickRow {
     ScreenPico8,
     Pico8Shader,
     Pico8Scale,
-    /// The shader row of the menu over the owner's PICO-8, which has no settings pages of its own.
-    Pico8PlayShader,
 }
 
 impl QuickRow {
-    pub const ALL: [QuickRow; 139 + cfg!(feature = "nds") as usize] = [
+    pub const ALL: [QuickRow; 138 + cfg!(feature = "nds") as usize] = [
         QuickRow::FastForward,
         QuickRow::FastForwardSound,
         QuickRow::Screen,
@@ -295,7 +293,6 @@ impl QuickRow {
         QuickRow::ScreenPico8,
         QuickRow::Pico8Shader,
         QuickRow::Pico8Scale,
-        QuickRow::Pico8PlayShader,
     ];
 
     pub const MAIN: [QuickRow; 6] = [
@@ -475,9 +472,8 @@ impl QuickRow {
         QuickRow::ResumePowerOn,
     ];
 
-    pub const PLAY: [QuickRow; 10] = [
+    pub const PLAY: [QuickRow; 9] = [
         QuickRow::Resume,
-        QuickRow::Pico8PlayShader,
         QuickRow::UndoSave,
         QuickRow::UndoLoad,
         QuickRow::UndoReset,
@@ -612,7 +608,6 @@ impl QuickRow {
             | QuickRow::Shortcuts
             | QuickRow::ControlsInGame => &QuickRow::CONTROL_PAGES,
             QuickRow::Resume
-            | QuickRow::Pico8PlayShader
             | QuickRow::UndoSave
             | QuickRow::UndoLoad
             | QuickRow::UndoReset
@@ -745,7 +740,7 @@ impl QuickRow {
             QuickRow::GbaShader => "Shader",
             QuickRow::GbShader => "Shader",
             QuickRow::GbcShader => "Shader",
-            QuickRow::Pico8Shader | QuickRow::Pico8PlayShader => "Shader",
+            QuickRow::Pico8Shader => "Shader",
             QuickRow::GbaColourCorrection => "Color Correction",
             QuickRow::GbColourCorrection => "Color Correction",
             QuickRow::GbcColourCorrection => "Color Correction",

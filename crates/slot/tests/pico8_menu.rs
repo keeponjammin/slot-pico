@@ -18,17 +18,32 @@ fn press(g: &mut Gestures, m: &mut Menu, btn: Btn, at: u64, held: u64) -> Vec<St
 }
 
 #[test]
-fn pico8_only_gets_resume_its_shader_and_exit_game() {
+fn pico8_gets_slots_pages_with_only_the_screens_shader_in_them() {
+    let hidden = hidden();
     assert_eq!(
-        QuickRow::Resume.shown(&hidden()),
-        [
-            QuickRow::Resume,
-            QuickRow::Pico8PlayShader,
-            QuickRow::ExitGame
-        ]
+        QuickRow::Resume.shown(&hidden),
+        [QuickRow::Resume, QuickRow::Settings, QuickRow::ExitGame]
     );
-    assert_eq!(ROWS.to_vec(), QuickRow::Resume.shown(&hidden()));
-    assert_eq!(QuickRow::Pico8PlayShader.label(), "Shader");
+    assert_eq!(QuickRow::PlayScreen.shown(&hidden), [QuickRow::PlayScreen]);
+    assert_eq!(QuickRow::Shader.shown(&hidden), [QuickRow::Shader]);
+    let shown: Vec<_> = [QuickRow::Resume, QuickRow::PlayScreen, QuickRow::Shader]
+        .iter()
+        .flat_map(|r| r.shown(&hidden))
+        .collect();
+    assert_eq!(ROWS.to_vec(), shown);
+}
+
+/// Opens the menu and walks to the shader in the Screen panel: Settings,
+/// then Screen.
+fn to_the_shader(g: &mut Gestures, m: &mut Menu) {
+    press(g, m, Btn::Menu, 0, 100);
+    g.set_context(Context::Menu);
+    assert_eq!(press(g, m, Btn::Down, 1000, 80), [Step::Moved]);
+    assert_eq!(m.row(), Some(QuickRow::Settings));
+    assert_eq!(press(g, m, Btn::A, 1500, 80), [Step::Moved]);
+    assert_eq!(m.row(), Some(QuickRow::PlayScreen));
+    assert_eq!(press(g, m, Btn::A, 2000, 80), [Step::Moved]);
+    assert_eq!(m.row(), Some(QuickRow::Shader));
 }
 
 #[test]
@@ -53,26 +68,39 @@ fn exit_game_is_two_down_and_a_leaves() {
 }
 
 #[test]
-fn the_shader_row_steps_the_shader_and_stays_open() {
+fn the_shader_steps_left_and_right_and_the_menu_stays_open() {
     let (mut g, mut m) = (Gestures::new(), Menu::default());
-    press(&mut g, &mut m, Btn::Menu, 0, 100);
-    g.set_context(Context::Menu);
-    assert_eq!(press(&mut g, &mut m, Btn::Down, 1000, 80), [Step::Moved]);
-    assert_eq!(m.row(), Some(QuickRow::Pico8PlayShader));
+    to_the_shader(&mut g, &mut m);
     assert_eq!(
-        press(&mut g, &mut m, Btn::Right, 2000, 80),
+        press(&mut g, &mut m, Btn::Right, 3000, 80),
         [Step::Shader(true)]
     );
     assert_eq!(
-        press(&mut g, &mut m, Btn::Left, 3000, 80),
+        press(&mut g, &mut m, Btn::Left, 4000, 80),
         [Step::Shader(false)]
     );
-    assert_eq!(
-        press(&mut g, &mut m, Btn::A, 4000, 80),
-        [Step::Shader(true)]
-    );
+    assert!(press(&mut g, &mut m, Btn::A, 5000, 80).is_empty());
     assert!(m.is_open(), "changing the shader closed the menu");
+}
+
+#[test]
+fn b_goes_back_a_page_at_a_time_and_resumes_from_the_top() {
+    let (mut g, mut m) = (Gestures::new(), Menu::default());
+    to_the_shader(&mut g, &mut m);
+    assert_eq!(press(&mut g, &mut m, Btn::B, 3000, 80), [Step::Moved]);
+    assert_eq!(m.row(), Some(QuickRow::PlayScreen));
+    assert_eq!(press(&mut g, &mut m, Btn::B, 4000, 80), [Step::Moved]);
+    assert_eq!(m.row(), Some(QuickRow::Settings));
     assert_eq!(press(&mut g, &mut m, Btn::B, 5000, 80), [Step::Resume]);
+    assert!(!m.is_open());
+}
+
+#[test]
+fn a_menu_tap_resumes_from_any_page() {
+    let (mut g, mut m) = (Gestures::new(), Menu::default());
+    to_the_shader(&mut g, &mut m);
+    assert_eq!(press(&mut g, &mut m, Btn::Menu, 3000, 100), [Step::Resume]);
+    assert!(!m.is_open());
 }
 
 #[test]
