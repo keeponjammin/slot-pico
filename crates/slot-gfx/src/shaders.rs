@@ -90,10 +90,8 @@ vec3 lcd_ramp(vec3 x) {
 const float crt_gamma = 0.85;
 const float crt_saturation = 1.25;
 const float crt_bright = 1.04;
-const float crt_scan_depth = 0.22;
+const float crt_scan_depth = 0.30;
 const float crt_scan_width = 0.13;
-const float crt_glow = 0.50;
-const float crt_glow_wide = 0.45;
 const float crt_vignette = 0.07;
 float crt_scan(float y, float foot) {
     float centre = 1.0 - 0.5 * min(foot, 0.34);
@@ -110,7 +108,7 @@ void main() {
     } else if (u_mode > 6.5) {
         // The CRT look, as cores/pico8-sdl/sdl_init.c draws it for the owner's PICO-8: livelier
         // colours, a soft dark line at the foot of every game row (averaged over the screen
-        // pixel, `foot` rows tall), the glow laid over it near and wide, and a faint vignette.
+        // pixel, `foot` rows tall), the glow laid over it, and a faint vignette.
         float foot = u_uv.w * u_src.y / (u_rect.w * u_fbo.y);
         float y = uv.y * u_src.y;
         mediump vec3 k = pow(c, vec3(crt_gamma));
@@ -119,13 +117,9 @@ void main() {
         float q = foot * 0.25;
         mediump float s = 0.25 * (crt_scan(y - 1.5 * q, foot) + crt_scan(y - 0.5 * q, foot)
                         + crt_scan(y + 0.5 * q, foot) + crt_scan(y + 1.5 * q, foot));
-        mediump vec3 near = texture2D(u_glow, uv).rgb;
-        vec2 o = vec2(6.0) / u_src;
-        mediump vec3 wide = 0.25 * (texture2D(u_glow, uv + o).rgb + texture2D(u_glow, uv - o).rgb
-                          + texture2D(u_glow, uv + vec2(o.x, -o.y)).rgb
-                          + texture2D(u_glow, uv + vec2(-o.x, o.y)).rgb);
-        // The scanlines go over the glow, so it never fills them in.
-        k = clamp(k + near * crt_glow + wide * crt_glow_wide, 0.0, 1.0) * s;
+        // The glow goes over the scanlines: where the game is bright it fills them in, as a
+        // CRT's beam widens on bright rows.
+        k = clamp(k * s + texture2D(u_glow, uv).rgb, 0.0, 1.0);
         vec2 e = (uv - u_pic.xy) / (u_pic.zw - u_pic.xy) * 2.0 - 1.0;
         k *= 1.0 - crt_vignette * dot(e, e);
         c = clamp(k, 0.0, 1.0);
@@ -206,24 +200,57 @@ void main() {
 /// One direction of a 9-tap Gaussian, `u_step` apart (two game pixels: sigma 3.2 of them), as the
 /// PICO-8 SDL shim blurs. In the first pass `u_bright` keeps only what glows: nothing of dark
 /// colours, all of the brightest.
+/// One direction of a Gaussian of `u_sigma` game pixels, `u_step` being one pixel. Every pixel
+/// within reach counts, so a sharp edge blurs smoothly instead of leaving copies of itself a
+/// few pixels on. With `u_pairs` 0 it reads eight pixels each way, one by one, which holds
+/// whether or not the texture is filtered; with `u_pairs` 1 it reads sixteen, two at a time,
+/// between them, which needs a linearly filtered texture. `u_bright` keeps only what glows:
+/// nothing of dark colours, all of the brightest. The result is `u_weigh.x` of the blur and
+/// `u_weigh.y` of `u_add`.
 pub const GLOW_FRAG: &str = r#"
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
 precision mediump float;
+#endif
 uniform sampler2D u_tex;
+uniform sampler2D u_add;
 uniform vec2 u_step;
+uniform float u_sigma;
+uniform float u_pairs;
 uniform float u_bright;
+uniform vec2 u_weigh;
 varying vec2 v_uv;
 vec3 at(float k) {
-    vec3 c = texture2D(u_tex, v_uv + u_step * k).rgb;
-    float m = max(c.r, max(c.g, c.b));
+    mediump vec3 c = texture2D(u_tex, v_uv + u_step * k).rgb;
+    mediump float m = max(c.r, max(c.g, c.b));
     return c * mix(1.0, smoothstep(0.2, 0.85, m), u_bright);
 }
+float g(float k) {
+    return exp(-k * k / (2.0 * u_sigma * u_sigma));
+}
 void main() {
-    vec3 s = at(0.0) * 0.2466;
-    s += (at(-1.0) + at(1.0)) * 0.2006;
-    s += (at(-2.0) + at(2.0)) * 0.1081;
-    s += (at(-3.0) + at(3.0)) * 0.0386;
-    s += (at(-4.0) + at(4.0)) * 0.0091;
-    FRAG_COLOR = vec4(s, 1.0);
+    mediump vec3 s = at(0.0);
+    float t = 1.0;
+    for (int i = 1; i <= 8; i++) {
+        float k = float(i);
+        float w = g(k);
+        float o = k;
+        if (u_pairs > 0.5) {
+            float k1 = 2.0 * k - 1.0;
+            float w1 = g(k1);
+            float w2 = g(2.0 * k);
+            w = w1 + w2;
+            o = (k1 * w1 + 2.0 * k * w2) / max(w, 1e-6);
+        }
+        s += (at(o) + at(-o)) * w;
+        t += 2.0 * w;
+    }
+    mediump vec3 c = s / t * u_weigh.x;
+    if (u_weigh.y > 0.0) {
+        c += texture2D(u_add, v_uv).rgb * u_weigh.y;
+    }
+    FRAG_COLOR = vec4(c, 1.0);
 }
 "#;
 

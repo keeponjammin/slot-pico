@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## [1.16.0.5]
+
+- CRT's glow is a smooth halo now. It used to leave faint copies of bright edges a few pixels away, like a bad video cable. Bright pixels also fill their scanlines in, as a CRT's beam widens where the picture is bright.
+
+## [1.16.0.4]
+
 - Your own copy of PICO-8 now has all of PICO-8's shaders, as fake-08 does: Grid, Shimmerless and CRT. Pick one under Settings → Screen → PICO-8 → Shader, or from the new Shader row in the menu while PICO-8 plays; the whole screen changes at once.
 - CRT now also shows on your own copy of PICO-8 when PICO-8 scales its screen up before drawing it, which is when it showed nothing before.
 - CRT glows much more around bright pixels, on fake-08 and on your own PICO-8 alike, while colours stay true.
