@@ -2752,10 +2752,8 @@ impl App {
 
     pub fn in_game_hidden(&self) -> Vec<QuickRow> {
         let no_bezel = self.playing_platform().hardware() == Platform::Gba && !self.framed_panel();
-        // The menu over the owner's PICO-8 shows its shader here; slot's own menu has it under
-        // Settings > Screen. The default PICO-8 core is for carts yet to go in, so it waits for
-        // the shelf's settings.
-        let mut hidden = vec![QuickRow::Pico8PlayShader, QuickRow::Pico8Core];
+        // The default PICO-8 core is for carts yet to go in, so it waits for the shelf's settings.
+        let mut hidden = vec![QuickRow::Pico8Core];
         if !self.palette_live {
             hidden.push(QuickRow::Palette);
         }
@@ -2975,7 +2973,7 @@ impl App {
             QuickRow::GbaShader => Some(shader_value(self.gba_shader())),
             QuickRow::GbShader => Some(shader_value(self.state.shader_gb)),
             QuickRow::GbcShader => Some(shader_value(self.state.shader_gbc)),
-            QuickRow::Pico8Shader | QuickRow::Pico8PlayShader => {
+            QuickRow::Pico8Shader => {
                 Some(shader_value(self.state.shader_pico8))
             }
             QuickRow::Pico8Scale => Some(scale_value(self.resolved_scale(Platform::Pico8))),
@@ -3851,8 +3849,7 @@ impl App {
             self.state.wallpaper,
             WallpaperPick::File(_) | WallpaperPick::Random | WallpaperPick::Shelf
         );
-        // Only the menu over the owner's PICO-8 shows it, in place of the settings pages.
-        let mut hidden = vec![QuickRow::Pico8PlayShader];
+        let mut hidden = Vec::new();
         if self.state.kid_mode != KidMode::OneShelf {
             hidden.push(QuickRow::KidShelf);
         }
@@ -6815,7 +6812,6 @@ impl App {
             | QuickRow::GbShader
             | QuickRow::GbcShader
             | QuickRow::Pico8Shader
-            | QuickRow::Pico8PlayShader
             | QuickRow::GbPalette
             | QuickRow::Rumble
             | QuickRow::LeftStick
@@ -7121,7 +7117,7 @@ impl App {
                 }
                 s.shader_gbc = to;
             }
-            QuickRow::Pico8Shader | QuickRow::Pico8PlayShader => {
+            QuickRow::Pico8Shader => {
                 let to = s.shader_pico8.step(&Shader::PICO8, right);
                 if to == s.shader_pico8 {
                     return;

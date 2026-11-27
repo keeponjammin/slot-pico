@@ -105,7 +105,6 @@ fn screen_shows_the_palette_only_when_palettes_are_live() {
         a.in_game_hidden(),
         [
             &[
-                QuickRow::Pico8PlayShader,
                 QuickRow::Pico8Core,
                 QuickRow::Palette,
                 QuickRow::Bezel,
@@ -123,7 +122,6 @@ fn screen_shows_the_palette_only_when_palettes_are_live() {
         a.in_game_hidden(),
         [
             &[
-                QuickRow::Pico8PlayShader,
                 QuickRow::Pico8Core,
                 QuickRow::Bezel,
                 QuickRow::Overlay,

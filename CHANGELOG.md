@@ -4,6 +4,10 @@
 
 - If you own PICO-8, you can make it the core your PICO-8 carts play on: Settings → Gameplay → PICO-8 Core. Carts you favourite in Splore then go on your own PICO-8 instead of fake-08. A core you pick for one cart on its board still wins. Without PICO-8 on the card the row stays on fake-08.
 
+## [1.16.0.6]
+
+- The menu over your own copy of PICO-8 is laid out like the one over any other game: Resume, Settings and Exit Game. The shader is under Settings → Screen, in the panel along the bottom, and B goes back a page at a time.
+
 ## [1.16.0.5]
 
 - CRT's glow is a smooth halo now. It used to leave faint copies of bright edges a few pixels away, like a bad video cable. Bright pixels also fill their scanlines in, as a CRT's beam widens where the picture is bright.
