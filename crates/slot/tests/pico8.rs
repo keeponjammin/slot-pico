@@ -1179,6 +1179,83 @@ fn splore_favourites_go_on_the_shelf_once() {
 }
 
 #[test]
+fn a_cart_unfavourited_in_splore_comes_off_the_shelf() {
+    let d = TempDir::new().unwrap();
+    let kalikan = png(160, 205, |_, _| [0xff, 0, 0x4d, 0xff]);
+    let buns = png(160, 205, |_, _| [0, 0xff, 0x4d, 0xff]);
+    bbs_cart(d.path(), "carts", "kalikan_menu-6", &kalikan);
+    bbs_cart(d.path(), "5", "56576", &buns);
+    favourites(d.path(), FAVOURITES);
+    pico8::shelve_favourites(d.path(), |_| pico8::Fetched::Missing);
+    write_cart(d.path(), "mine.p8", b"pico-8 cartridge");
+    pico8::write_labels(d.path());
+    slot_store::write_selected_core(d.path(), Platform::Pico8, "Kalikan", Core::Pico8).unwrap();
+    let dir = pico8::carts_dir(d.path());
+    let label = d.path().join("Labels/PICO8/Kalikan.png");
+    assert!(dir.join("Kalikan.p8.png").is_file());
+    assert!(label.is_file());
+
+    // Kalikan is unfavourited; the buns stay.
+    favourites(d.path(), &FAVOURITES.lines().skip(1).collect::<Vec<_>>().join("\n"));
+    pico8::shelve_favourites(d.path(), |_| pico8::Fetched::Missing);
+    assert!(!dir.join("Kalikan.p8.png").exists(), "the unfavourited cart stayed");
+    assert!(!label.exists(), "its label stayed");
+    assert_eq!(
+        slot_store::read_selected_cores(d.path()).get("PICO8/Kalikan"),
+        None,
+        "its core stayed picked"
+    );
+    assert!(dir.join("Mai-chan's Sweet Buns.p8.png").is_file());
+    assert!(dir.join("mine.p8").is_file(), "a cart the owner put there went");
+
+    // Favourited again, it comes back.
+    favourites(d.path(), FAVOURITES);
+    pico8::shelve_favourites(d.path(), |_| pico8::Fetched::Missing);
+    assert!(dir.join("Kalikan.p8.png").is_file(), "a favourite again stayed off");
+}
+
+#[test]
+fn a_favourite_shelved_before_slot_kept_its_file_still_comes_off() {
+    let d = TempDir::new().unwrap();
+    let cart = png(160, 205, |_, _| [0xff, 0, 0x4d, 0xff]);
+    bbs_cart(d.path(), "carts", "pico_backrooms-1", &cart);
+    write_cart(d.path(), "Pico_backrooms.p8.png", &cart);
+    write_cart(d.path(), "Other.p8.png", b"\x89PNG\r\n\x1a\nother");
+    std::fs::create_dir_all(d.path().join("Config")).unwrap();
+    std::fs::write(
+        d.path().join("Config/pico8_favourites.txt"),
+        "pico_backrooms-1\n",
+    )
+    .unwrap();
+    favourites(d.path(), "");
+    pico8::shelve_favourites(d.path(), |_| panic!("asked the BBS"));
+    let dir = pico8::carts_dir(d.path());
+    assert!(!dir.join("Pico_backrooms.p8.png").exists());
+    assert!(dir.join("Other.p8.png").is_file());
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("Config/pico8_favourites.txt")).unwrap(),
+        ""
+    );
+}
+
+#[test]
+fn a_favourites_list_slot_cannot_read_takes_nothing_off() {
+    let d = TempDir::new().unwrap();
+    let cart = png(160, 205, |_, _| [0xff, 0, 0x4d, 0xff]);
+    bbs_cart(d.path(), "carts", "kalikan_menu-6", &cart);
+    favourites(d.path(), FAVOURITES);
+    pico8::shelve_favourites(d.path(), |_| pico8::Fetched::Missing);
+    let kalikan = pico8::carts_dir(d.path()).join("Kalikan.p8.png");
+    assert!(kalikan.is_file());
+    favourites(d.path(), "a list in some new format\n");
+    pico8::shelve_favourites(d.path(), |_| pico8::Fetched::Missing);
+    assert!(kalikan.is_file(), "an unreadable list took a cart off");
+    std::fs::remove_file(pico8::home_dir(d.path()).join("favourites.txt")).unwrap();
+    pico8::shelve_favourites(d.path(), |_| pico8::Fetched::Missing);
+    assert!(kalikan.is_file(), "a missing list took a cart off");
+}
+
+#[test]
 fn offline_the_bbs_is_asked_once_and_the_rest_wait() {
     let d = TempDir::new().unwrap();
     favourites(

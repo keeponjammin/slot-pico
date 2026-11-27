@@ -153,6 +153,22 @@ pub fn write_selected_core(
     crate::atomic::atomic_write(&path, out.as_bytes())
 }
 
+/// Forgets the core picked for a cart, as for one taken off the shelf.
+pub fn clear_selected_core(root: &Path, platform: Platform, stem: &str) -> std::io::Result<()> {
+    let path = root.join(SELECTED_CORE_FILE);
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    let bare = crate::ini::set(&existing, stem, None)?;
+    let out = crate::ini::set(&bare, &core_key(platform, stem), None)?;
+    if out == existing {
+        return Ok(());
+    }
+    crate::atomic::atomic_write(&path, out.as_bytes())
+}
+
 fn core_key(platform: Platform, stem: &str) -> String {
     format!("{}/{stem}", platform.dir_name())
 }

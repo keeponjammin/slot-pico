@@ -274,26 +274,131 @@ pub fn shelf_name(title: &str, id: &str) -> String {
     }
 }
 
-/// Puts every cart favourited in Splore on the PICO-8 shelf, once each, as a
-/// `.p8.png` under its title. The cart is Splore's own copy when it has one,
-/// or whatever `fetch` gets from the BBS. Returns how many went on; their
-/// labels are drawn with the others' at the next boot.
+/// A favourite slot put on the shelf: its BBS id and the file it became, as a
+/// line `id<TAB>file` of `SHELVED`. Lines from before slot kept the file are
+/// the id alone.
+struct Shelved {
+    id: String,
+    file: Option<String>,
+}
+
+fn read_shelved(record: &Path) -> Vec<Shelved> {
+    std::fs::read_to_string(record)
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(|l| match l.split_once('\t') {
+            Some((id, file)) => Shelved {
+                id: id.trim().to_string(),
+                file: Some(file.trim().to_string()).filter(|f| !f.is_empty()),
+            },
+            None => Shelved {
+                id: l.to_string(),
+                file: None,
+            },
+        })
+        .collect()
+}
+
+fn write_shelved(root: &Path, record: &Path, shelved: &[Shelved]) {
+    let text: String = shelved
+        .iter()
+        .map(|s| match &s.file {
+            Some(file) => format!("{}\t{file}\n", s.id),
+            None => format!("{}\n", s.id),
+        })
+        .collect();
+    let _ = std::fs::create_dir_all(root.join("Config"));
+    if let Err(e) = slot_store::atomic_write(record, text.as_bytes()) {
+        eprintln!("slot: pico8: {}: {e}", record.display());
+    }
+}
+
+/// The cart on the shelf a favourite became: the file slot wrote it to, or,
+/// for one shelved before slot kept that, the cart that is Splore's copy of
+/// it byte for byte.
+fn shelved_cart(root: &Path, home: &Path, shelved: &Shelved) -> Option<PathBuf> {
+    let dir = carts_dir(root);
+    if let Some(file) = &shelved.file {
+        // Only a plain name in the carts folder: the record is a file on the card.
+        let plain = Path::new(file).file_name().is_some_and(|n| n == file.as_str());
+        return plain.then(|| dir.join(file)).filter(|p| p.is_file());
+    }
+    let bytes = std::fs::read(bbs_cart(home, &shelved.id)?).ok()?;
+    std::fs::read_dir(&dir)
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| is_cart(p) && !is_splore(p))
+        .find(|p| std::fs::read(p).is_ok_and(|b| b == bytes))
+}
+
+/// Takes a favourite that is no longer one off the shelf: its cart, its label
+/// and the core picked for it. Its saves stay, for if it comes back.
+fn take_off_shelf(root: &Path, home: &Path, shelved: &Shelved) {
+    let Some(cart) = shelved_cart(root, home, shelved) else {
+        return;
+    };
+    if is_splore(&cart) {
+        return;
+    }
+    if let Err(e) = std::fs::remove_file(&cart) {
+        eprintln!("slot: pico8: {}: {e}", cart.display());
+        return;
+    }
+    eprintln!(
+        "slot: pico8: {} is no longer a favourite, took {} off the shelf",
+        shelved.id,
+        cart.display()
+    );
+    let Some(stem) = cart_stem(&cart) else {
+        return;
+    };
+    let label = root
+        .join("Labels")
+        .join(PLATFORM_DIR)
+        .join(format!("{stem}.png"));
+    let _ = std::fs::remove_file(label);
+    if let Err(e) = slot_store::clear_selected_core(root, slot_store::Platform::Pico8, &stem) {
+        eprintln!("slot: pico8: could not forget {stem}'s core: {e}");
+    }
+}
+
+/// Keeps the PICO-8 shelf in step with Splore's favourites. Every cart
+/// favourited there goes on, once each, as a `.p8.png` under its title: the
+/// cart is Splore's own copy when it has one, or whatever `fetch` gets from
+/// the BBS. One slot put on and the owner has since unfavourited comes off
+/// again. A cart taken off the shelf by hand stays off while it is still a
+/// favourite. Returns how many went on; their labels are drawn with the
+/// others' at the next boot.
 pub fn shelve_favourites(root: &Path, mut fetch: impl FnMut(&str) -> Fetched) -> usize {
     let home = home_dir(root);
     let Ok(text) = std::fs::read_to_string(home.join(FAVOURITES)) else {
         return 0;
     };
+    let favourites = parse_favourites(&text);
     let record = root.join(SHELVED);
-    let mut shelved: Vec<String> = std::fs::read_to_string(&record)
-        .unwrap_or_default()
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
+    let mut shelved = read_shelved(&record);
+    // Lines none of which read as a favourite are a list slot does not
+    // understand, not an empty one: nothing comes off for that.
+    let understood = !favourites.is_empty() || text.lines().all(|l| l.trim().is_empty());
+    if understood {
+        let before = shelved.len();
+        shelved.retain(|s| {
+            let kept = favourites.iter().any(|f| f.id == s.id);
+            if !kept {
+                take_off_shelf(root, &home, s);
+            }
+            kept
+        });
+        if shelved.len() != before {
+            write_shelved(root, &record, &shelved);
+        }
+    }
     let mut offline = false;
     let mut added = 0;
-    for fav in parse_favourites(&text) {
-        if shelved.contains(&fav.id) {
+    for fav in favourites {
+        if shelved.iter().any(|s| s.id == fav.id) {
             continue;
         }
         let bytes = match bbs_cart(&home, &fav.id).and_then(|p| std::fs::read(p).ok()) {
@@ -331,13 +436,12 @@ pub fn shelve_favourites(root: &Path, mut fetch: impl FnMut(&str) -> Fetched) ->
             continue;
         }
         eprintln!("slot: pico8: favourite {} on the shelf as {}", fav.id, cart.display());
-        shelved.push(fav.id);
+        shelved.push(Shelved {
+            id: fav.id,
+            file: cart.file_name().map(|n| n.to_string_lossy().into_owned()),
+        });
         added += 1;
-        let _ = std::fs::create_dir_all(root.join("Config"));
-        let text = shelved.join("\n") + "\n";
-        if let Err(e) = slot_store::atomic_write(&record, text.as_bytes()) {
-            eprintln!("slot: pico8: {}: {e}", record.display());
-        }
+        write_shelved(root, &record, &shelved);
     }
     added
 }
